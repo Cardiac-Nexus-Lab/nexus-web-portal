@@ -144,6 +144,55 @@ st.markdown(
         letter-spacing: -0.01em;
         margin: 0.4rem 0 0.6rem;
     }}
+
+    /* Big bold black statement, like the "Senior nearshore talent..." block. */
+    .statement {{
+        font-weight: 800;
+        font-size: clamp(1.9rem, 5.5vw, 2.7rem);
+        line-height: 1.18;
+        letter-spacing: -0.02em;
+        color: #0b0b0c;
+        margin: 2.5rem 0 2rem;
+    }}
+
+    /* Full-bleed dark stat section, like the "86 NPS" block. */
+    .stat-section {{
+        background: #0b0b0c;
+        margin: 2.5rem calc(-50vw + 50%) 2.5rem;
+        padding: 3rem 1.5rem;
+    }}
+    .stat-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 1.5rem;
+        max-width: 780px;
+        margin: 0 auto;
+    }}
+    .stat-number {{
+        color: {ACCENT};
+        font-weight: 800;
+        font-size: clamp(2.2rem, 7vw, 3.2rem);
+        letter-spacing: -0.02em;
+        line-height: 1;
+    }}
+    .stat-caption {{
+        color: #c9c9cf;
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin-top: 0.4rem;
+    }}
+
+    /* Quote cards, like the floating testimonial callouts. */
+    .quote-card {{
+        background: #f5f5f7;
+        border-radius: 16px;
+        padding: 1.4rem 1.6rem;
+        font-size: 0.98rem;
+        line-height: 1.5;
+        color: #1d1d1f;
+        margin-bottom: 1rem;
+    }}
+    .quote-card strong {{ color: {ACCENT}; }}
     </style>
 
     <div class="brand-bar">
@@ -203,6 +252,58 @@ st.markdown(
     <strong>Research tool, not a diagnosis.</strong> This model was trained on the public
     PTB-XL dataset for research evaluation only. It is not a substitute for clinical
     judgment and must not be used as a standalone basis for any medical decision.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <p class="statement reveal">
+    A prediction without a reason isn't useful to a clinician.
+    So every result here comes with one.
+    </p>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="stat-section reveal">
+        <div class="stat-grid">
+            <div>
+                <div class="stat-number">0.92</div>
+                <div class="stat-caption">TEST AUROC</div>
+            </div>
+            <div>
+                <div class="stat-number">86%</div>
+                <div class="stat-caption">SENSITIVITY</div>
+            </div>
+            <div>
+                <div class="stat-number">21,801</div>
+                <div class="stat-caption">PTB-XL RECORDINGS</div>
+            </div>
+            <div>
+                <div class="stat-number">12</div>
+                <div class="stat-caption">ECG LEADS EXPLAINED</div>
+            </div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="quote-card reveal">
+    <strong>Integrated Gradients</strong> attributes every prediction back to the exact
+    millisecond and lead that drove it — so the output is a picture you can check
+    against real ECG morphology, not just a number to trust blindly.
+    </div>
+    <div class="quote-card reveal">
+    Trained and validated on <strong>PhysioNet's PTB-XL</strong>, the largest publicly
+    available 12-lead ECG dataset, using its official patient-wise folds to avoid
+    train/test leakage.
     </div>
     """,
     unsafe_allow_html=True,
