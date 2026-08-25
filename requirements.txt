@@ -1,6 +1,0 @@
-streamlit>=1.35
-torch>=2.2
-captum>=0.7
-numpy>=1.26
-pandas>=2.2
-matplotlib>=3.8
