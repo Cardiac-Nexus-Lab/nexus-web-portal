@@ -21,7 +21,10 @@ Then open the local URL Streamlit prints (typically `http://localhost:8501`).
 
 1. **`model.py`** — defines the same 1D CNN architecture used in `nexus-ai-engine`'s training notebooks, and downloads the trained checkpoint from that repo's `results/checkpoints/` directory on first run (cached locally afterward).
 2. **`preprocess.py`** — parses an uploaded ECG CSV into the `[12, 1000]` tensor shape the model expects, with the same per-lead standardization used during training. Also provides a synthetic demo signal so the app can be exercised without real ECG data.
-3. **`app.py`** — the Streamlit UI: upload or generate a signal, run inference, run Captum's Integrated Gradients, and render the waveform with a red/blue attribution overlay.
+3. **`theme.py`** — all page styling and markup helpers, kept out of `app.py` so the application file reads as pipeline logic. `theme.ACCENT` is the single source of the brand colour, mirrored in `.streamlit/config.toml` so Streamlit's own widgets match.
+4. **`app.py`** — the Streamlit UI: upload or generate a signal, run inference, run Captum's Integrated Gradients, and render the waveform with a red/blue attribution overlay.
+
+The headline figures on the page (AUROC, sensitivity) are read from the `metrics` dict inside the checkpoint rather than written into the markup, so they cannot drift away from the model actually being served.
 
 ## CSV format
 
