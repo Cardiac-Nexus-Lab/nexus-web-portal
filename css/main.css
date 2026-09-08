@@ -1,0 +1,414 @@
+/* =============================================================================
+   Cardiac Nexus — design system
+   -----------------------------------------------------------------------------
+   One rule governs colour on this site: red is never decoration. It is the
+   signal for pathology. A trace glows mint while the heart is healthy and
+   turns red as disease enters it, so hue itself carries diagnostic meaning.
+   ========================================================================== */
+
+/* --- 1. Tokens ------------------------------------------------------------ */
+:root {
+  /* Ground — a near-black with a blue cast, like a monitor in a dark room */
+  --ink-950: #04060A;
+  --ink-900: #070A10;
+  --ink-850: #0A0E16;
+  --ink-800: #0E131D;
+  --ink-700: #141B28;
+  --ink-600: #1D2635;
+
+  --line:        rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.14);
+
+  --text:       #E8ECF4;
+  --text-dim:   #99A3B7;
+  --text-faint: #5C6779;
+
+  /* Signal colours */
+  --pulse:      #34E5C0;   /* healthy trace */
+  --pulse-dim:  #1B8F79;
+  --signal:     #FF4055;   /* pathology */
+  --signal-dim: #A6202E;
+  --amber:      #FFB454;   /* uncertainty */
+  --violet:     #8E7CFF;   /* the model */
+  --infer:      #3FC7B4;   /* model output, attention, confidence */
+  --infer-dim:  #1E6B60;
+  --ok:         #4FB477;
+
+  --glow-pulse:  0 0 24px rgba(52, 229, 192, 0.35);
+  --glow-signal: 0 0 26px rgba(255, 64, 85, 0.40);
+
+  /* Type */
+  --font-display: 'Inter Tight', 'Helvetica Neue', Arial, sans-serif;
+  --font-prose:   'Newsreader', Georgia, 'Times New Roman', serif;
+  --font-mono:    'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* A fluid modular scale */
+  --t-hero:  clamp(3rem, 9.5vw, 9.5rem);
+  --t-h1:    clamp(2.4rem, 6vw, 5.2rem);
+  --t-h2:    clamp(1.9rem, 3.6vw, 3.3rem);
+  --t-h3:    clamp(1.25rem, 1.9vw, 1.7rem);
+  --t-lead:  clamp(1.1rem, 1.5vw, 1.45rem);
+  --t-body:  clamp(1rem, 1.1vw, 1.125rem);
+  --t-small: 0.875rem;
+  --t-micro: 0.72rem;
+
+  --railh: 3.25rem;
+  --gutter: clamp(1.25rem, 5vw, 6rem);
+  --measure: 34rem;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-io:  cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* --- 2. Reset ------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: auto;           /* Lenis owns scrolling */
+}
+
+body {
+  background: var(--ink-950);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: var(--t-body);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern' 1, 'liga' 1, 'cv05' 1;
+  overscroll-behavior-y: none;
+}
+
+/* Horizontal overflow is clipped on an inner wrapper, never on html/body.
+   overflow-x on the scroll container silently disables position:sticky and
+   every GSAP pin on the page, with no error to trace it back to. */
+.page { overflow-x: clip; }
+
+img, svg, canvas { display: block; max-width: 100%; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+::selection { background: rgba(255, 64, 85, 0.32); color: #fff; }
+
+/* --- 3. Typography -------------------------------------------------------- */
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.04;
+  text-wrap: balance;
+}
+
+.display    { font-size: var(--t-hero); font-weight: 500; letter-spacing: -0.05em; line-height: 0.92; }
+.h1         { font-size: var(--t-h1); }
+.h2         { font-size: var(--t-h2); }
+.h3         { font-size: var(--t-h3); letter-spacing: -0.02em; }
+
+.prose {
+  font-family: var(--font-prose);
+  font-size: var(--t-lead);
+  line-height: 1.62;
+  color: var(--text-dim);
+  max-width: var(--measure);
+  font-weight: 350;
+}
+.prose strong { color: var(--text); font-weight: 600; }
+.prose em { font-style: italic; color: var(--text); }
+.prose + .prose { margin-top: 1.1em; }
+
+.lead {
+  font-family: var(--font-prose);
+  font-size: clamp(1.25rem, 2.1vw, 1.85rem);
+  line-height: 1.45;
+  color: var(--text);
+  font-weight: 350;
+  max-width: 40rem;
+  text-wrap: pretty;
+}
+
+/* The small monospaced label that sits above a section title. It gives the
+   page its instrument-panel character and does a lot of orientation work. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+}
+.eyebrow::before {
+  content: '';
+  width: 1.6rem;
+  height: 1px;
+  background: var(--signal);
+  flex: none;
+}
+.eyebrow.is-pulse::before { background: var(--pulse); }
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* --- 4. Layout ------------------------------------------------------------ */
+.wrap {
+  width: 100%;
+  max-width: 84rem;
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+.wrap--wide { max-width: 100rem; }
+.wrap--narrow { max-width: 52rem; }
+
+section { position: relative; scroll-margin-top: calc(var(--railh) + 0.5rem); }
+.section-pad { padding-block: clamp(6rem, 14vh, 11rem); }
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));
+  gap: clamp(2rem, 5vw, 5rem);
+}
+
+/* A hairline that draws itself as it scrolls into view */
+.rule {
+  height: 1px;
+  background: var(--line);
+  transform-origin: left center;
+}
+
+/* --- 5. The ECG paper grid ------------------------------------------------
+   Real ECG paper is printed with 1 mm and 5 mm squares. Reproducing that
+   ratio, rather than an arbitrary grid, is what makes a trace read as
+   clinical rather than as generic sci-fi UI.                                */
+.ecg-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 64, 85, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 64, 85, 0.16) 1px, transparent 1px),
+    linear-gradient(rgba(255, 64, 85, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 64, 85, 0.055) 1px, transparent 1px);
+  background-size: 60px 60px, 60px 60px, 12px 12px, 12px 12px;
+  opacity: 0.5;
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 45%, #000 35%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 45%, #000 35%, transparent 100%);
+}
+
+/* --- 6. Reveal primitives -------------------------------------------------
+   Elements start displaced and are released by GSAP. Defining the resting
+   state in CSS means the page is never blank if JavaScript is slow.        */
+.reveal      { opacity: 0; transform: translateY(1.75rem); }
+.reveal-fast { opacity: 0; transform: translateY(0.9rem); }
+
+/* Line-by-line masked text reveal */
+.split-line { display: block; overflow: hidden; }
+.split-line > span { display: block; transform: translateY(105%); }
+
+/* If JS fails or motion is suppressed, show everything immediately */
+.no-js .reveal, .no-js .reveal-fast { opacity: 1; transform: none; }
+.no-js .split-line > span { transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal, .reveal-fast { opacity: 1 !important; transform: none !important; }
+  .split-line > span { transform: none !important; }
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+
+
+/* --- 7. Paper mode --------------------------------------------------------
+   Real ECG paper is a warm cream printed with a pink grid. Flipping the
+   evidence chapter to it is not a decoration: it is the moment the site stops
+   describing the instrument and hands over its output.                      */
+[data-theme='paper'] {
+  --ink-950: #F6F2ED;
+  --ink-900: #F1ECE5;
+  --ink-850: #EDE7DF;
+  --ink-800: #FFFFFF;
+  --ink-700: #E4DACF;
+  --ink-600: #D6C9BB;
+  --line:        rgba(24, 16, 10, 0.11);
+  --line-strong: rgba(24, 16, 10, 0.22);
+  --text:       #14100C;
+  --text-dim:   #4C463F;
+  --text-faint: #7C736A;
+  --pulse:      #0F7D68;
+  --signal:     #C00E28;
+  --signal-dim: #8A0A1C;
+  --infer:      #0C6E60;
+  --amber:      #9A6410;
+  --glow-pulse:  none;
+  --glow-signal: none;
+}
+[data-theme='paper'] .ecg-grid { opacity: 1; }
+[data-theme='paper'] body,
+[data-theme='paper'] ::selection { background-color: rgba(192, 14, 40, 0.18); }
+
+/* Both themes transition together so the flip reads as one move. */
+.theme-zone {
+  transition: background-color 700ms var(--ease-io), color 700ms var(--ease-io);
+}
+
+/* --- 8. Shared components ------------------------------------------------- */
+
+/* Chapter bar. Fixed to the top rather than down one side: a vertical rail
+   sits over the body column at every scroll position, which is exactly where
+   the charts and the text live. Along the top it overlaps nothing. */
+.rail {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 60;
+  height: var(--railh);
+  display: flex;
+  align-items: center;
+  gap: clamp(1rem, 3vw, 2.5rem);
+  padding-inline: var(--gutter);
+  background: rgba(7, 10, 16, 0.78);
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+  transform: translateY(-100%);
+  transition: transform 0.55s var(--ease-out);
+}
+.rail.is-on { transform: none; }
+
+.rail__brand {
+  display: flex; align-items: center; gap: 0.6rem;
+  color: var(--text); white-space: nowrap; flex: none;
+  letter-spacing: 0.16em;
+}
+.rail__mark {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--signal);
+  box-shadow: 0 0 0 0 rgba(255, 64, 85, 0.55);
+  animation: railPulse 2.6s var(--ease-io) infinite;
+  flex: none;
+}
+@keyframes railPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 64, 85, 0.5); }
+  70%  { box-shadow: 0 0 0 7px rgba(255, 64, 85, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 64, 85, 0); }
+}
+
+.rail__list {
+  list-style: none; padding: 0; margin: 0 0 0 auto;
+  display: flex; align-items: center;
+  gap: clamp(0.6rem, 1.7vw, 1.5rem);
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.rail__list::-webkit-scrollbar { display: none; }
+.rail__list a {
+  display: flex; align-items: center; gap: 0.4rem;
+  white-space: nowrap;
+  color: var(--text-faint);
+  padding-block: 0.35rem;
+  position: relative;
+  transition: color 0.3s var(--ease-out);
+}
+.rail__list a::after {
+  content: '';
+  position: absolute; left: 0; right: 0; bottom: -0.35rem;
+  height: 1px; background: var(--signal);
+  transform: scaleX(0); transform-origin: left center;
+  transition: transform 0.35s var(--ease-out);
+}
+.rail__list a:hover { color: var(--text-dim); }
+.rail__list a[aria-current='true'] { color: var(--text); }
+.rail__list a[aria-current='true']::after { transform: scaleX(1); }
+.rail__n { color: var(--text-faint); }
+.rail__list a[aria-current='true'] .rail__n { color: var(--signal); }
+
+/* Below the breakpoint the full list will not fit honestly, so it is
+   replaced by the name of the chapter you are actually in. */
+.rail__now { display: none; margin-left: auto; color: var(--text-dim); white-space: nowrap; }
+
+.progress {
+  position: fixed; inset: calc(var(--railh) - 1px) 0 auto 0;
+  height: 2px; z-index: 61;
+  background: transparent;
+  opacity: 0; transition: opacity 0.55s var(--ease-out);
+}
+.rail.is-on ~ .progress { opacity: 1; }
+
+/* Motion toggle — on a medical site, vestibular-sensitive readers are
+   over-represented. The preference should not be buried in the OS. */
+.motion-toggle {
+  position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 60;
+  font-family: var(--font-mono); font-size: var(--t-micro);
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid var(--line); border-radius: 100px;
+  padding: 0.55rem 0.9rem;
+  background: rgba(8, 11, 17, 0.72);
+  backdrop-filter: blur(10px);
+  opacity: 0.5;
+  transition: color 0.3s, border-color 0.3s, opacity 0.3s;
+}
+/* A floating control sits over body text at some scroll position no matter
+   where it is placed, so it stays quiet until it is actually wanted. */
+.motion-toggle:hover, .motion-toggle:focus-visible { opacity: 1; color: var(--text); border-color: var(--line-strong); }
+[data-theme='paper'] .motion-toggle { background: rgba(246, 242, 237, 0.78); }
+
+/* Section heading block */
+.head { max-width: 46rem; margin-bottom: clamp(2.5rem, 6vh, 4.5rem); }
+.head .h2 { margin-top: 1.25rem; }
+.head .prose { margin-top: 1.75rem; }
+
+/* Pull quote — large type carrying one idea */
+.pull {
+  font-family: var(--font-prose);
+  font-size: clamp(1.6rem, 3.6vw, 3rem);
+  line-height: 1.22;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  max-width: 22ch;
+  text-wrap: balance;
+}
+.pull em { font-style: italic; color: var(--signal); }
+.pull--wide { max-width: 34ch; }
+
+/* Citation marker */
+.cite {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--text-faint);
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+}
+.cite a { border-bottom: 1px solid var(--line-strong); }
+.cite a:hover { color: var(--text); }
+
+/* Hairline-ruled card. No shadows anywhere on this site. */
+.card {
+  border: 1px solid var(--line);
+  padding: clamp(1.4rem, 2.4vw, 2rem);
+  background: var(--ink-900);
+  position: relative;
+}
+.card__n {
+  font-family: var(--font-mono); font-size: var(--t-micro);
+  color: var(--text-faint); letter-spacing: 0.18em;
+  display: block; margin-bottom: 1rem;
+}
+.card h3 { margin-bottom: 0.75rem; }
+.card p { color: var(--text-dim); font-size: 0.97rem; line-height: 1.62; }
+
+/* Big figure */
+.figure { display: flex; flex-direction: column; gap: 0.5rem; }
+.figure__n {
+  font-family: var(--font-display);
+  font-size: clamp(2.6rem, 6vw, 5rem);
+  font-weight: 400; letter-spacing: -0.05em; line-height: 0.95;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: 'tnum' 1;
+}
+.figure__n .u { font-size: 0.44em; letter-spacing: 0; color: var(--text-faint); margin-left: 0.15em; }
+.figure__l { font-size: 0.95rem; color: var(--text-dim); max-width: 22rem; line-height: 1.5; }
+.figure--signal .figure__n { color: var(--signal); }

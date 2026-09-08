@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cardiac Nexus — Reading the heart's electrical signature</title>
+<meta name="description" content="An AI engine that reads the 12-lead ECG. How the heart works, how it fails, what it writes down, and how a machine learns to read it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:ital,wght@0,300..700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,200..600;1,6..72,300..500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/main.css">
+<link rel="stylesheet" href="css/sections.css">
+</head>
+<body>
+<script>document.documentElement.classList.remove('no-js');</script>
+
+<nav class="rail" aria-label="Chapters">
+  <a class="rail__brand" href="#top"><span class="rail__mark"></span>Cardiac Nexus</a>
+  <ol class="rail__list">
+    <li><a href="#stakes"   data-ch="stakes"><span class="rail__n">01</span> Stakes</a></li>
+    <li><a href="#signal"   data-ch="signal"><span class="rail__n">02</span> Signal</a></li>
+    <li><a href="#organ"    data-ch="organ"><span class="rail__n">03</span> Organ</a></li>
+    <li><a href="#leads"    data-ch="leads"><span class="rail__n">04</span> Views</a></li>
+    <li><a href="#classes"  data-ch="classes"><span class="rail__n">05</span> Failures</a></li>
+    <li><a href="#hard"     data-ch="hard"><span class="rail__n">06</span> Difficulty</a></li>
+    <li><a href="#machine"  data-ch="machine"><span class="rail__n">07</span> Machine</a></li>
+    <li><a href="#evidence" data-ch="evidence"><span class="rail__n">08</span> Evidence</a></li>
+    <li><a href="#limits"   data-ch="limits"><span class="rail__n">09</span> Limits</a></li>
+  </ol>
+  <span class="rail__now" id="railNow" aria-hidden="true"></span>
+</nav>
+<div class="progress"><i></i></div>
+<button class="motion-toggle" id="motionToggle" aria-pressed="false">Reduce motion</button>
+
+<div class="page">
+
+<!-- ═══════════════ HERO ═══════════════ -->
+<section class="hero" id="top">
+  <div class="ecg-grid"></div>
+  <canvas class="hero__trace" id="heroTrace" aria-hidden="true"></canvas>
+  <div class="hero__veil"></div>
+  <div class="wrap hero__inner">
+    <p class="eyebrow is-pulse reveal-fast">Cardiac Nexus &nbsp;/&nbsp; ECG intelligence</p>
+    <h1 class="display hero__title">
+      <span class="split-line"><span>Every heartbeat</span></span>
+      <span class="split-line"><span>writes itself down.</span></span>
+    </h1>
+    <p class="lead hero__lead reveal">
+      A heart is an electrical organ. Roughly once a second it fires a wave of charge through
+      itself, and that wave reaches the skin. Ten seconds, ten electrodes, twelve points of view —
+      and the muscle has told you a great deal about its own condition.
+      <strong>This is a machine built to read what it wrote.</strong>
+    </p>
+    <div class="hero__meta reveal">
+      <div class="hero__stat"><span class="hero__stat-n mono" data-count="12">0</span><span class="hero__stat-l">simultaneous leads</span></div>
+      <div class="hero__stat"><span class="hero__stat-n mono" data-count="10">0</span><span class="hero__stat-l">seconds of signal</span></div>
+      <div class="hero__stat"><span class="hero__stat-n mono" data-count="5">0</span><span class="hero__stat-l">diagnostic classes</span></div>
+      <div class="hero__stat"><span class="hero__stat-n mono" data-count="0.911" data-dec="3">0</span><span class="hero__stat-l">macro AUROC, held out</span></div>
+    </div>
+  </div>
+  <div class="hero__scroll"><span class="mono">Scroll</span><span class="hero__scroll-line"></span></div>
+</section>
+
+<!-- ═══════════════ 01 · THE STAKES ═══════════════ -->
+<section id="stakes" class="section-pad stakes">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">01 &nbsp;—&nbsp; The stakes</p>
+      <h2 class="h1">The cost of an unread trace.</h2>
+      <p class="prose">
+        The heart is the only organ whose failure you can hear coming, if someone is listening.
+        The electrocardiogram is the cheapest, most portable window into cardiac electrical
+        function that medicine has. The scarce resource has never been the machine.
+      </p>
+    </div>
+
+    <div class="stakes__grid">
+      <div class="figure reveal figure--signal">
+        <span class="figure__n" data-count="19.8" data-dec="1">0<span class="u">M</span></span>
+        <span class="figure__l">People killed by cardiovascular disease in 2022 — about 32% of all deaths worldwide, and the largest single cause of human death for decades.</span>
+      </div>
+      <div class="figure reveal">
+        <span class="figure__n" data-count="4.5" data-dec="1">0<span class="u">M</span></span>
+        <span class="figure__l">Die suddenly of cardiac causes each year. Global survival to hospital discharge after out-of-hospital arrest averages 8.8%.</span>
+      </div>
+      <div class="figure reveal">
+        <span class="figure__n" data-count="75">0<span class="u">%</span></span>
+        <span class="figure__l">Of cardiovascular deaths occur in low- and middle-income countries, where primary care often cannot detect cardiac risk early enough to act.</span>
+      </div>
+      <div class="figure reveal figure--signal">
+        <span class="figure__n" data-count="68.5" data-dec="1">0<span class="u">%</span></span>
+        <span class="figure__l">Pooled ECG interpretation accuracy of practising physicians across 78 studies. Cardiologists reached 74.9%. Medical students, 42.0%.</span>
+      </div>
+      <div class="figure reveal">
+        <span class="figure__n" data-count="0.2" data-dec="1"><span class="u">per 100k</span></span>
+        <span class="figure__l">Cardiologists in sub-Saharan Africa, against more than 7 per 100,000 in the United States. Some countries have none registered at all.</span>
+      </div>
+      <div class="figure reveal figure--signal">
+        <span class="figure__n" data-count="0.33" data-dec="2">0</span>
+        <span class="figure__l">Cohen&rsquo;s &#954; for agreement between physicians reading the same tracing for possible STEMI. That is poor agreement, on the diagnosis where minutes cost muscle.</span>
+      </div>
+    </div>
+
+    <blockquote class="stakes__quote reveal">
+      <p class="pull">The scarce resource is not the machine. <em>It is the reading.</em></p>
+    </blockquote>
+
+    <p class="cite reveal">
+      WHO <em>Cardiovascular diseases</em> fact sheet (2022 data) &middot;
+      AHA Heart Disease and Stroke Statistics, 2025 Update &middot;
+      Yan et al., <em>Critical Care</em> 2020 &middot;
+      Cook, Oh &amp; Pusic, <em>JAMA Internal Medicine</em> 2020 &middot;
+      McCabe et al., <em>JAHA</em> 2013 &middot;
+      PASCAR Sudden Cardiac Death Task Force, 2018
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 02 · THE SIGNAL — pinned PQRST ═══════════════ -->
+<section id="signal" class="signal">
+  <div class="signal__stage">
+    <div class="ecg-grid"></div>
+    <div class="signal__stage-inner">
+      <p class="eyebrow signal__label" id="pqrstLabel">The grammar of a heartbeat</p>
+      <svg class="signal__svg" id="pqrstSvg" viewBox="0 0 1200 340" preserveAspectRatio="xMidYMid meet" role="img" aria-label="One cardiac cycle showing the P wave, PR segment, QRS complex, ST segment and T wave">
+        <path class="pq-ghost" fill="none" stroke-width="2.5"/>
+        <path class="pq-glow"  fill="none" stroke-width="9"/>
+        <path class="pq-line"  fill="none" stroke-width="2.75"/>
+        <g class="pq-marks"></g>
+        <circle class="pq-head" r="6"/>
+      </svg>
+      <div class="signal__readout mono" id="pqrstReadout"></div>
+    </div>
+  </div>
+
+  <div class="signal__steps">
+    <div class="wrap wrap--narrow">
+      <div class="signal__intro">
+        <p class="eyebrow">02 &nbsp;—&nbsp; The signal</p>
+        <h2 class="h1">Six marks, and the whole of<br>a heartbeat.</h2>
+        <p class="prose">
+          Muscle cells hold a charge across their membranes at rest. When they fire, that separation
+          collapses — and because they fire in sequence rather than all at once, there is always a
+          boundary between charged and discharged tissue. A boundary like that is an electrical
+          dipole. The body is salt water. The chest is the surface. The ECG is what leaks out.
+        </p>
+      </div>
+
+      <article class="step" data-step="0" data-cycle="0.16">
+        <span class="step__tag mono">P wave</span>
+        <h3 class="h3">The atria depolarise.</h3>
+        <p class="prose">Small, because there is little muscle up there. Roughly 80 to 100 milliseconds
+        wide. In a healthy sinus beat it points upward in leads II, III and aVF and downward in aVR,
+        because the wavefront travels from upper right to lower left. Its shape is a readout of atrial size.</p>
+      </article>
+
+      <article class="step" data-step="1" data-cycle="0.235">
+        <span class="step__tag mono">PR segment</span>
+        <h3 class="h3">Nothing happens. That is the point.</h3>
+        <p class="prose">The flat stretch after the P wave. Almost nothing electrically large enough to
+        see, because the impulse is crawling through the atrioventricular node. This is the only place
+        on the ECG where <em>silence is the measurement</em> — and where the delay lets the atria finish
+        emptying before the ventricles begin to squeeze.</p>
+      </article>
+
+      <article class="step" data-step="2" data-cycle="0.30">
+        <span class="step__tag mono">QRS complex</span>
+        <h3 class="h3">The ventricles fire.</h3>
+        <p class="prose">Large, because there is a great deal of muscle. Narrow — under 120 milliseconds —
+        because the Purkinje network delivers the signal almost everywhere at once. Its width is
+        therefore a direct readout of whether the wiring is intact. A wide QRS means the signal
+        crawled through muscle instead of running through fibre.</p>
+      </article>
+
+      <article class="step" data-step="3" data-cycle="0.385">
+        <span class="step__tag mono">ST segment</span>
+        <h3 class="h3">The plateau, and the most loaded 80 ms on the trace.</h3>
+        <p class="prose">Every ventricular cell is depolarised at once, so no boundary exists and no
+        voltage difference is generated. It should sit exactly at baseline. When it does not, some
+        region of muscle is at a different potential from its neighbours — which in practice means
+        injured. This is where a heart attack announces itself.</p>
+      </article>
+
+      <article class="step" data-step="4" data-cycle="0.462">
+        <span class="step__tag mono">T wave</span>
+        <h3 class="h3">The ventricles recover.</h3>
+        <p class="prose">Normally upright, which is a small mystery until you learn that repolarisation
+        travels the opposite way from depolarisation — outer layer first. Two reversals make a positive.
+        Because recovery is the fragile phase, the T wave is where ischaemia, drug effect, electrolyte
+        disturbance and strain all show up first.</p>
+      </article>
+
+      <article class="step" data-step="5" data-cycle="0.55">
+        <span class="step__tag mono">QT interval</span>
+        <h3 class="h3">The window of vulnerability.</h3>
+        <p class="prose">From the start of the QRS to the end of the T wave: the total duration of
+        ventricular electrical activity, and the span during which a badly timed extra beat can tip the
+        heart into a rhythm it does not survive.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ 03 · THE ORGAN — the heart, broken down ═══════════════ -->
+<section id="organ" class="organ">
+  <div class="organ__stage">
+    <div class="organ__mount" id="heartMount"></div>
+    <div class="organ__trace">
+      <canvas id="organTrace" aria-hidden="true"></canvas>
+      <span class="organ__trace-label mono" id="organTraceLabel">Sinus rhythm</span>
+    </div>
+  </div>
+
+  <div class="organ__steps">
+    <div class="wrap wrap--narrow">
+      <div class="organ__intro">
+        <p class="eyebrow">03 &nbsp;—&nbsp; The organ</p>
+        <h2 class="h1">Five parts, in the order<br>the current travels.</h2>
+        <p class="prose">
+          Everything the ECG records is generated by five structures, firing in sequence. Follow them
+          in order and the trace stops being a squiggle. For each one: what happens here, what goes
+          wrong, what that does to a person, and the mark it leaves on the page.
+        </p>
+      </div>
+
+      <!-- STATION 1 -->
+      <article class="station" data-station="sa" data-cond="NORM">
+        <header class="station__head">
+          <span class="station__n mono">01</span>
+          <h3 class="h2">The sinoatrial node</h3>
+          <p class="station__sub mono">The pacemaker &nbsp;·&nbsp; writes the P wave</p>
+        </header>
+        <div class="beat" data-beat="happens">
+          <span class="beat__k mono">What happens here</span>
+          <p class="prose">In the wall of the right atrium sits a strand of tissue a few millimetres
+          across, full of cells that refuse to hold still. Ordinary muscle rests at a stable voltage.
+          These cells leak charge inward continuously, through a current physiologists named
+          <em>funny</em> because it flows the wrong way compared with everything else. Their voltage
+          drifts up until it crosses threshold, fires, resets, and drifts again — about two and a half
+          billion times in a life. Nothing tells it to start. The nervous system only argues about tempo.</p>
+        </div>
+        <div class="beat" data-beat="wrong">
+          <span class="beat__k mono">What goes wrong</span>
+          <p class="prose">The node ages, fibroses, and loses cells. Ischaemia can starve it, since in
+          most people it is fed by a branch of the right coronary artery. It slows below the body's
+          demand, pauses outright for seconds, or fails to accelerate when a person climbs stairs. Or
+          it is simply outvoted: ectopic tissue elsewhere in the atria begins firing faster.</p>
+        </div>
+        <div class="beat" data-beat="causes">
+          <span class="beat__k mono">What it causes</span>
+          <p class="prose">Sinus node dysfunction. Fatigue the patient blames on age, breathlessness on
+          exertion, lightheadedness, then syncope without warning. Its common variant alternates racing
+          and pausing, so the same patient risks both stroke and collapse. It is the leading reason
+          permanent pacemakers are implanted.</p>
+        </div>
+        <div class="beat" data-beat="ecg">
+          <span class="beat__k mono">The signature</span>
+          <p class="prose">The P wave, and its rhythm. Disease shows as a slow but normal-looking P
+          rhythm, as long flat pauses where a P wave should be, or as P waves that change shape when a
+          different focus takes over. When fibrillation replaces the node entirely, discrete P waves
+          vanish, the baseline becomes a fine tremor, and the intervals lose all regularity.</p>
+        </div>
+      </article>
+
+      <!-- STATION 2 -->
+      <article class="station" data-station="atria" data-cond="AFIB">
+        <header class="station__head">
+          <span class="station__n mono">02</span>
+          <h3 class="h2">The atria</h3>
+          <p class="station__sub mono">The receiving rooms &nbsp;·&nbsp; P wave morphology</p>
+        </header>
+        <div class="beat" data-beat="happens">
+          <span class="beat__k mono">What happens here</span>
+          <p class="prose">Thin-walled chambers, thin enough in places to see light through. Blood
+          arrives from the veins and mostly falls through them passively. Their muscular contribution
+          comes at the very end of filling, when they squeeze once and push a final bolus across the
+          valves — the atrial kick, worth roughly a fifth of ventricular filling in a healthy adult,
+          and considerably more in a stiff heart.</p>
+        </div>
+        <div class="beat" data-beat="wrong">
+          <span class="beat__k mono">What goes wrong</span>
+          <p class="prose">Atrial muscle answers sustained pressure by stretching, then by scarring.
+          Hypertension, mitral valve disease, sleep apnoea and obesity all load the atria. Fibrotic
+          tissue conducts slowly and unevenly — precisely the substrate a reentrant circuit needs. The
+          chamber stops contracting as a unit and starts quivering, 300 to 600 times a minute.</p>
+        </div>
+        <div class="beat" data-beat="causes">
+          <span class="beat__k mono">What it causes</span>
+          <p class="prose">Atrial fibrillation, and the enlargement that precedes it. Two harms follow.
+          The atrial kick is lost, which can push a stiff ventricle into failure. And blood stagnates in
+          the left atrial appendage, a blind pouch, where clot forms, then leaves, then lodges in the
+          brain. It is one of the most preventable causes of disabling stroke in medicine — and it is
+          often silent until the stroke.</p>
+        </div>
+        <div class="beat" data-beat="ecg">
+          <span class="beat__k mono">The signature</span>
+          <p class="prose">Chamber size writes itself into the P wave: enlargement broadens it past 120
+          milliseconds and splits it into two humps. Fibrillation erases it altogether — no organised
+          P waves, a trembling baseline, and an irregularly irregular ventricular response. <em>The
+          trace to the left has lost its P waves.</em></p>
+        </div>
+      </article>
+
+      <!-- STATION 3 -->
+      <article class="station" data-station="av" data-cond="CD" data-class="CD">
+        <header class="station__head">
+          <span class="station__n mono">03</span>
+          <h3 class="h2">The AV node and<br>the His&ndash;Purkinje system</h3>
+          <p class="station__sub mono">The wiring &nbsp;·&nbsp; PR interval and QRS width</p>
+        </header>
+        <div class="beat" data-beat="happens">
+          <span class="beat__k mono">What happens here</span>
+          <p class="prose">A ring of fibrous tissue insulates the atria from the ventricles completely.
+          There is exactly one electrical door through it, and the atrioventricular node is the doorman.
+          It conducts deliberately slowly — about a tenth of a second — and that delay is not a flaw.
+          It is the pause that lets the atria finish. Past the node the pace changes entirely: insulated
+          fibres carry the signal down the septum, split into left and right bundle branches, and fan
+          into the Purkinje network. The whole ventricular mass is lit in under a tenth of a second,
+          from the inside out.</p>
+        </div>
+        <div class="beat" data-beat="wrong">
+          <span class="beat__k mono">What goes wrong</span>
+          <p class="prose">Conduction tissue degenerates with age, and fibrosis interrupts it. The block
+          can sit at the node, where escape rhythms are usually reliable, or below it in the
+          His&ndash;Purkinje system, where they are not. The opposite failure also exists: an accessory
+          strand that bypasses the node entirely, letting impulses through without the protective delay.</p>
+        </div>
+        <div class="beat" data-beat="causes">
+          <span class="beat__k mono">What it causes</span>
+          <p class="prose">First-degree block delays but does not interrupt. Complete heart block is
+          different: the ventricles are left to an escape pacemaker that is slow, unreliable, and capable
+          of stopping. The patient collapses without warning and may not survive it. Bundle branch block
+          rarely causes symptoms directly but marks structural disease — and left bundle branch block
+          makes the two ventricles contract out of step, a dyssynchrony that can drive heart failure on
+          its own.</p>
+        </div>
+        <div class="beat" data-beat="ecg">
+          <span class="beat__k mono">The signature</span>
+          <p class="prose">This is the interval story. Beyond 200 milliseconds of PR is first-degree
+          block. In complete block the P waves and QRS complexes march at independent rates, related to
+          nothing. Below the node the story is written in width: anything over 120 milliseconds means
+          the ventricles were activated slowly, muscle to muscle, instead of through the network.
+          <em>Watch the complex to the left smear out.</em></p>
+        </div>
+      </article>
+
+      <!-- STATION 4 -->
+      <article class="station" data-station="ventricles" data-cond="HYP" data-class="HYP">
+        <header class="station__head">
+          <span class="station__n mono">04</span>
+          <h3 class="h2">The ventricles and<br>the myocardium</h3>
+          <p class="station__sub mono">The pump &nbsp;·&nbsp; QRS voltage and the T wave</p>
+        </header>
+        <div class="beat" data-beat="happens">
+          <span class="beat__k mono">What happens here</span>
+          <p class="prose">The muscle here is not layered like a barrel but wound in helices, so
+          contraction is a wringing motion and the apex twists against the base. The left ventricle
+          carries a wall about a centimetre thick because it must generate pressure against the entire
+          body; the right, facing only the lungs, is a third as thick. Each beat, calcium floods every
+          cell, the filaments slide, and roughly 60% of the chamber's contents leave.</p>
+        </div>
+        <div class="beat" data-beat="wrong">
+          <span class="beat__k mono">What goes wrong</span>
+          <p class="prose">Muscle adapts to load, and the adaptations are the disease. Chronic pressure
+          — from hypertension or a narrowed valve — thickens the wall inward, so the chamber becomes
+          strong, stiff, and poorly perfused relative to its own mass. Chronic volume overload dilates
+          it instead. Sarcomere mutations thicken it with no load at all. And after an infarct, dead
+          muscle is replaced by scar, which neither contracts nor conducts evenly.</p>
+        </div>
+        <div class="beat" data-beat="causes">
+          <span class="beat__k mono">What it causes</span>
+          <p class="prose">Heart failure, in both its forms: a stiff ventricle that fills poorly and
+          backs pressure into the lungs even while its ejection fraction reads normal, or a dilated one
+          that empties poorly. Hypertrophic cardiomyopathy is a leading cause of sudden death in young
+          athletes. And scar-based reentry is the engine of ventricular tachycardia, which degenerates
+          into fibrillation, the terminal rhythm in most sudden cardiac death.</p>
+        </div>
+        <div class="beat" data-beat="ecg">
+          <span class="beat__k mono">The signature</span>
+          <p class="prose">Mass shows up as voltage — more muscle under the electrode means taller
+          deflections. But the most informative feature is what hypertrophy does to <em>recovery</em>:
+          a downsloping ST segment with an asymmetric inverted T wave, the strain pattern, which says
+          the muscle is not merely large but under duress.</p>
+        </div>
+        <div class="metricchip" data-metric="HYP"></div>
+      </article>
+
+      <!-- STATION 5 -->
+      <article class="station" data-station="coronary" data-cond="MI" data-class="MI">
+        <header class="station__head">
+          <span class="station__n mono">05</span>
+          <h3 class="h2">The coronary arteries</h3>
+          <p class="station__sub mono">The supply &nbsp;·&nbsp; the ST segment and Q waves</p>
+        </header>
+        <div class="beat" data-beat="happens">
+          <span class="beat__k mono">What happens here</span>
+          <p class="prose">The heart does not feed from the blood inside it. Two arteries leave the
+          aorta millimetres above the valve and wrap the outside of the organ. Vessels branch inward,
+          from the surface toward the lining. Because the muscle compresses its own supply while
+          contracting, the left ventricle is perfused almost entirely in <em>diastole</em> — in the gap
+          between beats. Faster heart rates shorten that gap.</p>
+        </div>
+        <div class="beat" data-beat="wrong">
+          <span class="beat__k mono">What goes wrong</span>
+          <p class="prose">Lipid accumulates in the vessel wall over decades under a fibrous cap. The
+          narrowing itself is often tolerable. The dangerous event is not gradual: a cap ruptures, the
+          blood meets material it should never contact, and a clot forms in seconds to minutes.</p>
+        </div>
+        <div class="beat" data-beat="causes">
+          <span class="beat__k mono">What it causes</span>
+          <p class="prose">Complete occlusion gives ST-elevation myocardial infarction, in which muscle
+          dies at a rate measured in minutes and the outcome depends almost entirely on how fast the
+          vessel is opened. What follows is heart failure from lost contractile mass, arrhythmia from
+          the scar, and in the worst case cardiogenic shock.</p>
+        </div>
+        <div class="beat" data-beat="ecg">
+          <span class="beat__k mono">The signature</span>
+          <p class="prose">Here the ECG becomes a map as well as a clock. Injury through the full wall
+          thickness pushes the ST segment up, with reciprocal depression in the leads facing from the
+          opposite side. <strong>And the leads involved name the artery</strong> — V1 to V4 for the
+          anterior wall and the left anterior descending; II, III and aVF for the inferior wall; I, aVL,
+          V5 and V6 for the lateral. Days later, Q waves appear: the permanent handwriting of dead muscle.</p>
+        </div>
+        <div class="metricchip" data-metric="MI"></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ 04 · THE VIEWS — 12 leads ═══════════════ -->
+<section id="leads" class="section-pad leads">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">04 &nbsp;—&nbsp; The views</p>
+      <h2 class="h1">A lead is not a wire.<br>A lead is a point of view.</h2>
+      <p class="prose">
+        Ten electrodes go on the patient: four on the limbs, six across the chest. From those ten
+        contacts, twelve voltage differences are computed — and each one describes the same electrical
+        event projected onto a different axis in space. Asking what a lead sees is the same as asking
+        what a shadow looks like from one angle.
+      </p>
+      <p class="prose">
+        Twelve leads, but only eight independent signals: leads III, aVR, aVL and aVF are exact linear
+        combinations of I and II. The redundancy is not waste. It is how a clinician — and a model —
+        tells a real regional change from a loose electrode.
+      </p>
+    </div>
+
+    <div class="leadgrid" id="leadGrid"></div>
+
+    <div class="leads__foot">
+      <p class="cite">Hover or focus any lead to read what it looks at. Traces are synthesised from a
+      Gaussian model of the cardiac cycle, projected per lead — they are illustrations of morphology,
+      not recordings of a patient.</p>
+      <div class="leads__switch" id="leadSwitch" role="group" aria-label="Condition"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ 05 · FIVE FAILURES ═══════════════ -->
+<section id="classes" class="section-pad classes">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">05 &nbsp;—&nbsp; Five failures</p>
+      <h2 class="h1">What the model is asked<br>to recognise.</h2>
+      <p class="prose">
+        Cardiac Nexus is trained on PTB-XL: 21,388 ten-second recordings from 18,617 patients,
+        annotated by up to two cardiologists. Seventy-one diagnostic statements aggregate into five
+        superclasses — and a single record may carry more than one, because a patient with an old
+        infarct and a bundle branch block has both.
+      </p>
+      <p class="prose">
+        The five carve the ECG along the axis of <em>mechanism</em>, not symptom. Choose one and watch
+        the trace change.
+      </p>
+    </div>
+
+    <div class="classes__lab">
+      <div class="classes__viz">
+        <div class="ecg-grid"></div>
+        <canvas id="classTrace" aria-hidden="true"></canvas>
+        <div class="classes__caption" id="classCaption"></div>
+      </div>
+      <div class="classes__panel">
+        <div class="classes__tabs" id="classTabs" role="tablist" aria-label="Diagnostic superclass"></div>
+        <div class="classes__detail" id="classDetail"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ 06 · WHY IT IS HARD ═══════════════ -->
+<section id="hard" class="section-pad hard">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">06 &nbsp;—&nbsp; The difficulty</p>
+      <h2 class="h1">Why this is hard,<br>and what we do about it.</h2>
+      <p class="prose">
+        Six problems stand between a trace and a trustworthy number. None of them is fully solved here.
+        Each is paired with the specific thing that was done about it.
+      </p>
+    </div>
+
+    <ol class="pairs" id="pairs"></ol>
+  </div>
+</section>
+
+<!-- ═══════════════ 07 · THE MACHINE ═══════════════ -->
+<section id="machine" class="section-pad machine">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">07 &nbsp;—&nbsp; The machine</p>
+      <h2 class="h1">Twelve thousand numbers<br>become five.</h2>
+      <p class="prose">
+        The input is a 12&times;1000 array — twelve leads, ten seconds, one hundred samples a second.
+        Time collapses stage by stage while abstraction grows, until the whole recording is a single
+        128-dimensional vector. Only then does anything ask what the diagnosis is.
+      </p>
+    </div>
+
+    <div class="funnel" id="funnel"></div>
+
+    <div class="machine__split">
+      <div class="card reveal">
+        <span class="card__n">The deliberate seam</span>
+        <h3 class="h3">645 parameters out of 6,368,389.</h3>
+        <p>The classifier head is 0.01% of the model. Everything else is the encoder that turns a
+        waveform into a representation. That split is not an accident of implementation — it is the
+        interface at which a second modality can later be joined, without the ECG branch being
+        rewritten. MRI and tabular records are planned and not started. The seam is the down payment.</p>
+      </div>
+      <div class="card reveal">
+        <span class="card__n">The efficiency argument</span>
+        <h3 class="h3">5.2&times; smaller, 98.1% of the score.</h3>
+        <p>The published benchmark for this task is 0.928 macro AUROC, achieved by an xresnet1d101
+        with 33.3 million parameters. This model reaches 0.9107 with 6.4 million, trained on a laptop
+        through Apple's MPS backend. The three-layer CNN that preceded it reached 0.9048 with 59,301
+        parameters &mdash; 0.5% of the published model's size for 97.5% of its score.</p>
+      </div>
+    </div>
+
+    <div class="augment">
+      <h3 class="h2 augment__title">What the model is shown,<br>and what it is deliberately not.</h3>
+      <div class="augment__cols">
+        <div>
+          <p class="eyebrow is-pulse">Applied during training</p>
+          <ul class="auglist" id="augYes"></ul>
+        </div>
+        <div>
+          <p class="eyebrow">Ruled out on purpose</p>
+          <ul class="auglist auglist--no" id="augNo"></ul>
+          <p class="cite" style="margin-top:1.25rem">Each of these three is a standard augmentation
+          elsewhere. Each would teach the model an invariance that is clinically false.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ 08 · THE EVIDENCE — paper mode ═══════════════ -->
+<section id="evidence" class="section-pad evidence theme-zone" data-theme="paper">
+  <div class="ecg-grid"></div>
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">08 &nbsp;—&nbsp; The evidence</p>
+      <h2 class="h1">The numbers, and what<br>they are worth.</h2>
+      <p class="prose">
+        Everything below is measured on PTB-XL fold 10 — 2,158 recordings the model never saw, from
+        patients who appear in no other split. Confidence intervals are percentile bootstrap over 1,000
+        resamples. No point estimate appears here without its interval.
+      </p>
+    </div>
+
+    <div class="results" id="results"></div>
+
+    <div class="evidence__two">
+      <figure class="chartbox">
+        <figcaption>
+          <span class="eyebrow">Training history</span>
+          <h3 class="h3">Validation loss turns at epoch 16. AUROC keeps climbing to 20.</h3>
+          <p class="prose">Train loss falls monotonically. Validation loss bottoms out and then rises —
+          textbook overfitting. But the ranking metric peaks four epochs <em>later</em>, which is why
+          the checkpoint is selected on AUROC and the best weights restored, rather than taking the
+          final epoch.</p>
+        </figcaption>
+        <svg id="historyChart" viewBox="0 0 620 300" role="img" aria-label="Training and validation loss with validation macro AUROC across 25 epochs"></svg>
+      </figure>
+
+      <figure class="chartbox">
+        <figcaption>
+          <span class="eyebrow">Calibration</span>
+          <h3 class="h3" id="calHeadline">The model said 85%. It was right 46% of the time.</h3>
+          <p class="prose">A reliability diagram plots predicted confidence against observed frequency.
+          Perfect calibration is the diagonal. Raw outputs sag far below it — the model was systematically
+          overconfident. Vector scaling fits one slope and one intercept per class and pulls the curve
+          back onto the line. <strong>AUROC does not change at all</strong>, because the transform is
+          monotonic. The ranking was always fine. The numbers were lying.</p>
+        </figcaption>
+        <svg id="calChart" viewBox="0 0 620 300" role="img" aria-label="Reliability diagram before and after calibration"></svg>
+        <div class="chartbox__controls">
+          <div class="seg" id="calClass" role="group" aria-label="Class"></div>
+          <button class="seg__btn seg__btn--wide" id="calToggle" aria-pressed="false">Apply calibration</button>
+        </div>
+        <p class="cite" id="calNote"></p>
+      </figure>
+    </div>
+
+    <div class="evidence__two">
+      <figure class="chartbox">
+        <figcaption>
+          <span class="eyebrow">Efficiency</span>
+          <h3 class="h3">Parameters against score.</h3>
+          <p class="prose">Five hundred and sixty times more parameters buys 0.023 AUROC. The
+          horizontal axis is logarithmic, which is the only honest way to draw it.</p>
+        </figcaption>
+        <svg id="scatterChart" viewBox="0 0 620 300" role="img" aria-label="Parameter count against macro AUROC for five models"></svg>
+      </figure>
+
+      <figure class="chartbox">
+        <figcaption>
+          <span class="eyebrow">Attribution, audited</span>
+          <h3 class="h3">&minus;0.01 is the result we wanted.</h3>
+          <p class="prose">Integrated Gradients agrees with SmoothGrad at &rho;&nbsp;=&nbsp;0.90 — the
+          method is self-consistent. Against a network with <em>randomised weights</em>, correlation
+          collapses to &minus;0.012. That collapse is the passing grade: it shows the map describes
+          something the model learned, rather than merely the shape of the input. Published work finds
+          some attribution methods keep producing convincing pictures after the weights are destroyed.
+          This is the test that catches them, and it is shipped alongside the feature.</p>
+        </figcaption>
+        <svg id="attrChart" viewBox="0 0 620 300" role="img" aria-label="Attribution agreement with SmoothGrad versus with randomised weights"></svg>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ 09 · THE LIMITS ═══════════════ -->
+<section id="limits" class="section-pad limits">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">09 &nbsp;—&nbsp; The limits</p>
+      <h2 class="h1">What this does not do.</h2>
+      <p class="prose">
+        This section has the same weight as the results because it carries the same information. Read
+        it before you read anything above it again.
+      </p>
+    </div>
+    <ul class="limits__list" id="limitsList"></ul>
+    <p class="limits__stamp mono">Research evaluation only &nbsp;·&nbsp; not a medical device &nbsp;·&nbsp; no regulatory clearance &nbsp;·&nbsp; never tested on a patient</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot__grid">
+      <div>
+        <p class="pull pull--wide">Noise is different every beat.<br><em>Disease is the same every beat.</em></p>
+      </div>
+      <div class="foot__links">
+        <p class="eyebrow">Sources</p>
+        <ul>
+          <li><a href="https://physionet.org/content/ptb-xl/1.0.3/" target="_blank" rel="noopener">PTB-XL v1.0.3 — PhysioNet</a></li>
+          <li><a href="https://www.nature.com/articles/s41597-020-0495-6" target="_blank" rel="noopener">Wagner et al., Scientific Data 2020</a></li>
+          <li><a href="https://arxiv.org/abs/2004.13701" target="_blank" rel="noopener">Strodthoff et al., IEEE JBHI 2021</a></li>
+          <li><a href="https://arxiv.org/abs/1706.04599" target="_blank" rel="noopener">Guo et al., calibration, ICML 2017</a></li>
+          <li><a href="https://arxiv.org/abs/1703.01365" target="_blank" rel="noopener">Sundararajan et al., Integrated Gradients</a></li>
+          <li><a href="https://papers.neurips.cc/paper/8160-sanity-checks-for-saliency-maps.pdf" target="_blank" rel="noopener">Adebayo et al., Sanity Checks, NeurIPS 2018</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="foot__fine mono">Cardiac Nexus &nbsp;·&nbsp; ECG signal processing, model development and evaluation.
+    All waveforms on this page are synthesised for illustration. All metrics are measured on held-out data and traceable to files in this repository.</p>
+  </div>
+</footer>
+
+</div><!-- /.page -->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"></script>
+<script src="js/content.js"></script>
+<script src="js/ecg.js"></script>
+<script src="js/trace.js"></script>
+<script src="js/heart.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
