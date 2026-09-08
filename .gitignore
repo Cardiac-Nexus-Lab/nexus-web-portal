@@ -1,3 +1,13 @@
+# Python (the Streamlit demo in this repo)
+.venv/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+
+# Editor and OS
 .DS_Store
 node_modules/
 *.log
+
+# Local-only working files
+.gitignore.local
