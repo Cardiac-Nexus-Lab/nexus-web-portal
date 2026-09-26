@@ -1,0 +1,187 @@
+/* HERO FUSION CARD */
+
+@property --fc-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.fc {
+  position: relative;
+  padding: 24px 24px 18px;
+  border-radius: 26px;
+  color: #eefbfc;
+  background:
+    radial-gradient(ellipse 70% 60% at 85% 50%, rgba(26, 143, 156, 0.28), transparent 70%),
+    linear-gradient(160deg, #123a52 0%, #0c2a3d 60%, #0a2233 100%);
+  box-shadow: 0 30px 60px rgba(12, 44, 62, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  isolation: isolate;
+}
+
+/* A slow light travelling round the edge */
+.fc::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(from var(--fc-angle), transparent 0 70%, #5ee6e8 80%, #b69cff 88%, #fbbf5a 94%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: fc-spin 7s linear infinite;
+  z-index: -1;
+  opacity: 0.8;
+}
+@keyframes fc-spin { to { --fc-angle: 360deg; } }
+
+.fc-head { display: flex; align-items: center; gap: 12px; }
+.fc-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: #83e2e5;
+  background: rgba(94, 230, 232, 0.12);
+  border: 1px solid rgba(94, 230, 232, 0.2);
+}
+.fc-head b { display: block; font: 700 16px var(--font-heading); color: #fff; }
+.fc-head small { display: block; margin-top: 2px; font-size: 12px; color: #86aab6; }
+.fc-live {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: #7ee0b4;
+  background: rgba(126, 224, 180, 0.1);
+}
+.fc-live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  animation: fc-blink 1.6s ease-in-out infinite;
+}
+@keyframes fc-blink { 50% { opacity: 0.3; } }
+
+.fc-diagram { display: block; width: 100%; height: auto; margin-top: 18px; overflow: visible; }
+
+/* Input rows */
+.fc-row-box { fill: rgba(255, 255, 255, 0.045); stroke: rgba(255, 255, 255, 0.08); }
+.fc-row-dot { fill: var(--c); filter: drop-shadow(0 0 5px var(--c)); }
+.fc-row-label { font: 800 18px var(--font-heading); fill: #fff; letter-spacing: 0.5px; }
+.fc-row-sub { font: 500 14px var(--font-body); fill: #86aab6; }
+
+.fc-ecg {
+  fill: none;
+  stroke: #5ee6e8;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px rgba(94, 230, 232, 0.7));
+}
+.fc-ecg-scroll { animation: fc-scroll 2.4s linear infinite; }
+@keyframes fc-scroll { to { transform: translateX(-74px); } }
+
+.fc-mri-rv { fill: rgba(182, 156, 255, 0.28); stroke: #b69cff; stroke-width: 1.2; }
+.fc-mri-wall { fill: none; stroke: #b69cff; stroke-width: 6; opacity: 0.75; }
+.fc-mri-cavity { fill: rgba(182, 156, 255, 0.22); }
+.fc-mri-scan {
+  fill: #e4dbff;
+  filter: drop-shadow(0 0 4px #b69cff);
+  animation: fc-scan 2.2s ease-in-out infinite alternate;
+}
+@keyframes fc-scan { to { transform: translateY(42px); } }
+
+.fc-ehr-track { fill: rgba(255, 255, 255, 0.08); }
+.fc-ehr-bar {
+  fill: #fbbf5a;
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: fc-bar 2.8s ease-in-out infinite;
+}
+@keyframes fc-bar {
+  0%, 100% { transform: scaleX(0.55); }
+  50% { transform: scaleX(1); }
+}
+
+/* Streams into the core */
+.fc-link-track { fill: none; stroke: rgba(255, 255, 255, 0.07); stroke-width: 2; }
+.fc-link {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 0.3 4.7;
+  animation: fc-flow 1.1s linear infinite;
+  filter: drop-shadow(0 0 4px var(--c));
+}
+@keyframes fc-flow {
+  from { stroke-dashoffset: 5; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* Core */
+.fc-orbit {
+  fill: none;
+  stroke: url(#fc-ring);
+  stroke-width: 1.6;
+  stroke-dasharray: 6 9;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: fc-rotate 14s linear infinite;
+}
+@keyframes fc-rotate { to { transform: rotate(360deg); } }
+.fc-halo { fill: rgba(94, 230, 232, 0.07); stroke: rgba(94, 230, 232, 0.25); stroke-width: 1; }
+.fc-pulse {
+  fill: none;
+  stroke: #5ee6e8;
+  stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: fc-ping 1.9s ease-out infinite;
+}
+@keyframes fc-ping {
+  from { transform: scale(1); opacity: 0.8; }
+  to { transform: scale(1.75); opacity: 0; }
+}
+.fc-core { filter: drop-shadow(0 0 18px rgba(94, 230, 232, 0.55)); }
+.fc-beatline-track,
+.fc-beatline {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.fc-beatline-track { stroke: rgba(255, 255, 255, 0.28); stroke-width: 3; }
+.fc-beatline {
+  stroke: #fff;
+  stroke-width: 3.4;
+  stroke-dasharray: 100;
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.9));
+  animation: fc-trace 1.9s cubic-bezier(0.55, 0, 0.35, 1) infinite;
+}
+@keyframes fc-trace {
+  0% { stroke-dashoffset: 100; opacity: 1; }
+  55% { stroke-dashoffset: 0; opacity: 1; }
+  85%, 100% { stroke-dashoffset: 0; opacity: 0; }
+}
+.fc-core-label { font: 800 18px var(--font-heading); fill: #fff; text-anchor: middle; }
+.fc-core-sub { font: 500 14px var(--font-body); fill: #86aab6; text-anchor: middle; }
+
+@media (max-width: 580px) {
+  .fc { padding: 18px 14px 14px; border-radius: 22px; }
+  .fc-diagram { margin-top: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fc::before, .fc-live i, .fc-ecg-scroll, .fc-mri-scan, .fc-ehr-bar,
+  .fc-link, .fc-orbit, .fc-pulse, .fc-beatline { animation: none; }
+  .fc-pulse { opacity: 0; }
+}

@@ -1,0 +1,424 @@
+/* EXPLODED HEART — scroll-driven multimodal showcase */
+
+.eh-section {
+  --ecg: #5ee6e8;
+  --mri: #b69cff;
+  --ehr: #fbbf5a;
+  position: relative;
+  height: 640vh;
+  background:
+    radial-gradient(ellipse 70% 60% at 34% 48%, #134a62 0%, #0a2638 52%, #06161f 100%);
+  color: #e6f3f6;
+}
+
+.eh-sticky {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
+  align-items: center;
+  overflow: hidden;
+}
+
+.eh-progress {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  z-index: 2;
+}
+.eh-progress span {
+  display: block;
+  height: 100%;
+  width: calc(var(--p, 0) * 100%);
+  background: linear-gradient(90deg, var(--ecg), var(--mri), var(--ehr));
+}
+
+/* STAGE */
+.eh-stage {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 3vh 0 3vh 3vw;
+}
+.eh-svg {
+  width: 100%;
+  height: 100%;
+  max-height: 92vh;
+  overflow: visible;
+}
+
+.eh-grid circle {
+  fill: none;
+  stroke: rgba(126, 230, 232, 0.07);
+  stroke-dasharray: 2 10;
+}
+
+/* PARTS: position is a pure function of --e, the explosion amount */
+.eh-part {
+  transform:
+    translate(calc(var(--dx) * var(--e, 0) * 1px), calc(var(--dy) * var(--e, 0) * 1px))
+    scale(calc(1 + (var(--s) - 1) * var(--e, 0)));
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 0.55s ease, filter 0.55s ease;
+  cursor: pointer;
+  outline: none;
+}
+.eh-part.is-dim { opacity: 0.14; filter: saturate(0.25); }
+.eh-part.is-active { filter: drop-shadow(0 0 16px var(--glow, rgba(255, 255, 255, 0.4))); }
+.eh-part[data-part='conduction'] { --glow: rgba(94, 230, 232, 0.7); }
+.eh-part[data-part^='atria'] { --glow: rgba(94, 230, 232, 0.55); }
+.eh-part[data-part='shell'] { --glow: rgba(214, 180, 255, 0.55); }
+.eh-part[data-part='lv'], .eh-part[data-part='rv'] { --glow: rgba(182, 156, 255, 0.7); }
+.eh-part[data-part^='vessels'] { --glow: rgba(251, 191, 90, 0.6); }
+.eh-part:focus-visible { filter: drop-shadow(0 0 10px #fff); }
+
+.eh-outline {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.26);
+  stroke-width: 1.2;
+  transition: stroke 0.5s ease, stroke-width 0.5s ease;
+}
+.eh-part.is-active .eh-outline { stroke: rgba(255, 255, 255, 0.85); stroke-width: 1.8; }
+
+.eh-fibres path {
+  fill: none;
+  stroke: rgba(255, 220, 210, 0.13);
+  stroke-width: 1.4;
+}
+
+.eh-coronary path {
+  fill: none;
+  stroke: #ff6e5e;
+  stroke-width: 3;
+  stroke-linecap: round;
+  opacity: 0.9;
+}
+
+/* Electrical system: faint inside the closed heart, bright once exposed */
+.eh-conduction { opacity: calc(0.4 + 0.6 * var(--e, 0)); }
+.eh-conduction > path {
+  fill: none;
+  stroke: #ffd66b;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  opacity: 0.75;
+}
+.eh-spark path {
+  fill: none;
+  stroke: #fffbe8;
+  stroke-width: 3.4;
+  stroke-linecap: round;
+  stroke-dasharray: 9 91;
+  animation: eh-spark 0.95s linear infinite;
+}
+.eh-node { fill: #fff4c2; stroke: #ffd66b; stroke-width: 2; }
+
+@keyframes eh-spark {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* Heartbeat while whole: lub-dub at ~66 bpm */
+.eh-beat { transform-box: fill-box; transform-origin: 50% 58%; }
+.act-intro .eh-beat,
+.act-fusion .eh-beat { animation: eh-beat 0.95s ease-in-out infinite; }
+@keyframes eh-beat {
+  0%, 100% { transform: scale(1); }
+  12% { transform: scale(1.035); }
+  24% { transform: scale(1); }
+  36% { transform: scale(1.02); }
+  50% { transform: scale(1); }
+}
+
+/* PROBE: the one thing that goes looking */
+.eh-probe {
+  transition: transform 0.85s cubic-bezier(0.65, 0, 0.35, 1);
+  pointer-events: none;
+}
+.eh-probe-halo { fill: var(--probe); opacity: 0.08; }
+.eh-probe-ring {
+  fill: none;
+  stroke: var(--probe);
+  stroke-width: 1.6;
+  stroke-dasharray: 10 8;
+}
+.eh-probe-ring--inner { stroke-dasharray: 3 6; opacity: 0.8; }
+.eh-probe-ticks { stroke: var(--probe); stroke-width: 1.6; stroke-linecap: round; }
+.eh-probe-dot { fill: #fff; }
+.eh-probe-ping { fill: none; stroke: var(--probe); stroke-width: 1.4; }
+.eh-probe-text {
+  fill: var(--probe);
+  stroke: #07192a;
+  stroke-width: 4px;
+  paint-order: stroke;
+  font: 700 11px var(--font-body, sans-serif);
+  letter-spacing: 2.4px;
+}
+
+.eh-leader {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 1.3;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  opacity: 0.7;
+  animation: eh-draw 0.7s 0.55s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+@keyframes eh-draw { to { stroke-dashoffset: 0; } }
+
+/* FUSION: three streams converge on one core */
+.eh-fusion { opacity: 0; transition: opacity 0.8s ease; }
+.eh-fusion.is-visible { opacity: 1; }
+.eh-stream-track { fill: none; stroke: rgba(255, 255, 255, 0.07); stroke-width: 2; }
+.eh-stream {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-dasharray: 0.4 3.6;
+  animation: eh-flow 1.2s linear infinite;
+  filter: drop-shadow(0 0 5px var(--c));
+}
+@keyframes eh-flow {
+  from { stroke-dashoffset: 4; }
+  to { stroke-dashoffset: 0; }
+}
+.eh-stream-label {
+  fill: var(--c);
+  font: 800 15px var(--font-heading, sans-serif);
+  letter-spacing: 3px;
+}
+.eh-core {
+  mix-blend-mode: screen;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: eh-core 0.95s ease-in-out infinite;
+}
+@keyframes eh-core {
+  0%, 100% { opacity: 0.55; transform: scale(0.9); }
+  14% { opacity: 1; transform: scale(1.12); }
+  38% { opacity: 0.8; transform: scale(1); }
+}
+
+/* Intro ECG trace */
+.eh-trace { opacity: 0; transition: opacity 0.6s ease; }
+.eh-trace.is-visible { opacity: 1; }
+.eh-trace path {
+  fill: none;
+  stroke: var(--ecg);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-dasharray: 100;
+  animation: eh-trace 3.2s linear infinite;
+  filter: drop-shadow(0 0 6px rgba(94, 230, 232, 0.6));
+}
+@keyframes eh-trace {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: -100; }
+}
+
+/* PANEL */
+.eh-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 28px;
+  padding: 8vh max(5vw, 28px) 8vh 2vw;
+}
+
+.eh-card {
+  position: relative;
+  padding: 28px 28px 24px;
+  border-radius: 20px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025));
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  max-width: 460px;
+}
+.eh-card > * { animation: eh-rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.eh-card > *:nth-child(2) { animation-delay: 0.06s; }
+.eh-card > *:nth-child(3) { animation-delay: 0.12s; }
+.eh-card > *:nth-child(4) { animation-delay: 0.18s; }
+.eh-card > *:nth-child(5) { animation-delay: 0.24s; }
+.eh-card > *:nth-child(6) { animation-delay: 0.3s; }
+.eh-card > *:nth-child(7) { animation-delay: 0.36s; }
+@keyframes eh-rise {
+  from { opacity: 0; transform: translateY(12px); filter: blur(4px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+
+.eh-card h3 {
+  color: #fff;
+  font-size: clamp(24px, 2.4vw, 34px);
+  letter-spacing: -0.8px;
+  line-height: 1.12;
+  margin: 2px 0 12px;
+}
+.eh-card--intro h3 { font-size: clamp(28px, 3vw, 42px); }
+.eh-kicker {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: #8fb7c4;
+}
+.eh-body { margin: 0; color: #b7ccd4; font-size: 15px; line-height: 1.65; }
+
+.eh-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.eh-count { font: 700 11px var(--font-body); letter-spacing: 2px; color: #6f95a3; }
+.eh-mods { display: flex; gap: 6px; }
+.eh-mod {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  padding: 4px 9px;
+  border-radius: 99px;
+  color: var(--c);
+  border: 1px solid color-mix(in srgb, var(--c) 45%, transparent);
+  background: color-mix(in srgb, var(--c) 12%, transparent);
+}
+
+.eh-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-top: 20px;
+}
+.eh-metrics > div {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.eh-metrics b {
+  display: block;
+  font: 800 26px var(--font-heading);
+  color: #fff;
+  letter-spacing: -0.5px;
+}
+.eh-metrics small { display: block; margin-top: 4px; font-size: 12px; line-height: 1.4; color: #93b1bc; }
+
+.eh-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+.eh-chips span {
+  font-size: 12px;
+  padding: 6px 11px;
+  border-radius: 99px;
+  color: #ffe2a8;
+  background: rgba(251, 191, 90, 0.1);
+  border: 1px solid rgba(251, 191, 90, 0.28);
+}
+
+.eh-status {
+  margin: 18px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7ee0b4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.eh-status::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+.eh-status.is-pending { color: #ffcf7a; }
+
+.eh-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 20px; font-size: 13px; color: #cfe2e8; }
+.eh-legend span { display: inline-flex; align-items: center; gap: 8px; }
+.eh-legend i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); }
+.eh-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 22px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: #7aa3b1;
+  animation: eh-nudge 1.8s ease-in-out infinite;
+}
+@keyframes eh-nudge { 50% { transform: translateY(4px); } }
+
+/* Rail of parts */
+/* .public nav styles the site header; the rail is also a nav, so override it here. */
+.eh-section .eh-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  max-width: 460px;
+}
+.eh-rail button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: transparent;
+  color: #6f8f9b;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  transition: color 0.3s, background 0.3s;
+}
+.eh-rail button:hover { color: #d5e7ec; background: rgba(255, 255, 255, 0.04); }
+.eh-rail button:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+.eh-rail i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--c);
+  transition: background 0.3s, box-shadow 0.3s, transform 0.3s;
+}
+.eh-rail button.is-current { color: #fff; background: rgba(255, 255, 255, 0.06); }
+.eh-rail button.is-current i { background: var(--c); box-shadow: 0 0 12px var(--c); transform: scale(1.25); }
+
+/* SMALL SCREENS: stage on top, panel below, rail as dots */
+@media (max-width: 900px) {
+  .eh-section { height: 700vh; }
+  .eh-sticky { grid-template-columns: 1fr; grid-template-rows: 44vh 1fr; }
+  .eh-stage { padding: 12px 10px 0; }
+  .eh-leader { display: none; }
+  .eh-panel { padding: 0 16px 16px; gap: 10px; justify-content: flex-start; }
+  .eh-card { padding: 16px 16px 14px; border-radius: 16px; max-width: none; }
+  .eh-card-top { margin-bottom: 10px; }
+  .eh-card h3 { font-size: 21px; margin-bottom: 8px; }
+  .eh-card--intro h3 { font-size: 24px; }
+  .eh-body { font-size: 13px; line-height: 1.5; }
+  .eh-metrics { grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .eh-metrics > div { padding: 9px 10px; }
+  .eh-metrics b { font-size: 18px; }
+  .eh-metrics small { font-size: 11px; line-height: 1.3; }
+  .eh-chips { margin-top: 12px; }
+  .eh-status { margin-top: 12px; }
+  .eh-legend { margin-top: 12px; }
+  .eh-hint { margin-top: 12px; }
+  .eh-section .eh-rail { flex-direction: row; justify-content: center; align-items: center; max-width: none; }
+  .eh-rail span { display: none; }
+  .eh-rail button { padding: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .act-intro .eh-beat, .act-fusion .eh-beat,
+  .eh-spark path, .eh-stream, .eh-trace path, .eh-hint, .eh-core { animation: none; }
+  .eh-probe { transition: none; }
+  .eh-card > * { animation: none; }
+  .eh-leader { animation: none; stroke-dashoffset: 0; }
+}

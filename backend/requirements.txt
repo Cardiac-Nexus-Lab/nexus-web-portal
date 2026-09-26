@@ -1,0 +1,30 @@
+# Web API
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+python-dotenv>=1.0
+sqlalchemy>=2.0.0
+psycopg[binary]>=3.1
+
+# Firebase sign-in token verification
+google-auth>=2.30
+requests>=2.31
+
+# Model inference (same versions as nexus-ai-engine)
+torch>=2.2
+numpy>=1.26
+pandas>=2.2
+scipy>=1.11
+scikit-learn==1.9.0
+joblib>=1.3
+captum>=0.7
+opencv-python-headless>=4.9
+nibabel>=5.2
+pydicom>=2.4
+matplotlib>=3.8
+pillow>=10.0
+wfdb>=4.1
+tqdm>=4.66
+
+# PDF reports
+reportlab>=4.0
