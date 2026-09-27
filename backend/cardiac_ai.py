@@ -345,16 +345,19 @@ def _load_nifti(filename: str, data: bytes) -> dict:
     import nibabel as nib
 
     suffix = ".nii.gz" if filename.lower().endswith(".gz") else ".nii"
-    with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
-        handle.write(data)
-        handle.flush()
+    # Written and closed before reading: Windows cannot reopen a file that is still open,
+    # which is what NamedTemporaryFile would need.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+        path = Path(folder) / f"upload{suffix}"
+        path.write_bytes(data)
         try:
-            image = nib.load(handle.name)
+            image = nib.load(str(path))
             array = np.asarray(image.dataobj, dtype=np.float32)
             zooms = tuple(float(z) for z in image.header.get_zooms()[:3])
         except Exception as error:
             raise InputError(f"{filename} could not be read as a NIfTI file; it may be damaged or "
                              f"not a NIfTI file at all.") from error
+        del image  # release the file so the folder can be removed on Windows
     if array.ndim == 4:
         raise InputError(f"{filename} is a 4D cine series. Upload the end-diastole and end-systole "
                          f"frames as two separate 3D files.")
