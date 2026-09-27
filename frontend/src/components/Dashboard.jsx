@@ -157,7 +157,7 @@ function OverviewPage({ setPage, result }) {
         <div>
           <Badge>WORKFLOW</Badge>
           <h2>Build a unified patient representation.</h2>
-          <p>Upload each modality, enter the health profile, and run the late-fusion pipeline.</p>
+          <p>Upload each modality, enter the health profile, and run the analysis.</p>
           <button className="primary" onClick={() => setPage('New Analysis')}>
             Start analysis <ArrowRight size={17} />
           </button>
@@ -742,84 +742,55 @@ function SettingsPage({ user, token, onLogout, onUserUpdate }) {
 // PAGE 8: TECHNOLOGY PAGE
 // ----------------------------------------------------
 function TechnologyPage() {
+  const cards = [
+    { Icon: LineChart, title: 'ECG classifier: xresnet1d18 (1D ResNet-18)', sub: '12-lead ECG, 10 seconds at 100 Hz.',
+      body: 'A one-dimensional residual CNN trained on PTB-XL gives the probability of five findings: normal, myocardial infarction, ST/T change, conduction disturbance and hypertrophy. Probabilities are calibrated so that 90% means about 90%.' },
+    { Icon: Activity, title: 'ECG digitizer: CNN trace localizer', sub: 'Flat scans of 12x1 paper printouts.',
+      body: 'Finds the page, cuts out the twelve lead strips and traces the line in each strip column by column, turning the drawing back into a signal the classifier can read.' },
+    { Icon: Image, title: 'MRI segmenter: 2.5D U-Net', sub: 'Short-axis cine MRI, end-diastole and end-systole.',
+      body: 'Each slice goes in with its two neighbours and comes out outlined into left ventricle, right ventricle and heart muscle. The outlines give chamber volumes, ejection fraction and muscle mass.' },
+    { Icon: ClipboardList, title: 'MRI diagnosis and health checks', sub: 'Measurements and guideline rules.',
+      body: 'A logistic regression on the heart measurements, with height and weight, suggests one of five conditions. Blood pressure and cholesterol are checked against ACC/AHA 2017 and NCEP ATP III; these are rules, not a trained model.' },
+  ];
   return (
     <>
       <DemoNotice />
       <div className="page-title">
         <div>
           <div className="eyebrow">SYSTEM ARCHITECTURE</div>
-          <h1>Multimodal AI Technology Stack</h1>
-          <p>Detailed overview of feature extractors, late-fusion layers, and explainability frameworks.</p>
+          <h1>How Cardiac Nexus works</h1>
+          <p>The models behind each analysis, how they are explained, and how the results are combined.</p>
         </div>
       </div>
 
       <div className="analysis-grid">
-        <div className="upload-card">
-          <div className="upload-title">
-            <LineChart size={22} />
-            <div>
-              <h3>1D CNN + BiLSTM (ECG Signal)</h3>
-              <p>Processes raw 12-lead ECG signals across 10-second temporal windows.</p>
+        {cards.map(({ Icon, title, sub, body }) => (
+          <div className="upload-card" key={title}>
+            <div className="upload-title">
+              <Icon size={22} />
+              <div>
+                <h3>{title}</h3>
+                <p>{sub}</p>
+              </div>
             </div>
+            <p style={{ fontSize: 13, color: '#637b86', marginTop: 12 }}>{body}</p>
           </div>
-          <p style={{ fontSize: 13, color: '#637b86', marginTop: 12 }}>
-            Extracts temporal rhythm dynamics, ST-segment deviations, and wave morphology anomalies using 1D convolutional layers followed by bidirectional LSTM units.
-          </p>
-        </div>
-
-        <div className="upload-card">
-          <div className="upload-title">
-            <Image size={22} />
-            <div>
-              <h3>2D/3D ResNet CNN (Cardiac MRI)</h3>
-              <p>Processes spatial DICOM image slices of left and right ventricles.</p>
-            </div>
-          </div>
-          <p style={{ fontSize: 13, color: '#637b86', marginTop: 12 }}>
-            Extracts spatial ventricular wall thickness, ejection fraction proxies, and tissue scar characteristics using deep residual convolutional neural networks.
-          </p>
-        </div>
-
-        <div className="upload-card">
-          <div className="upload-title">
-            <ClipboardList size={22} />
-            <div>
-              <h3>Dense Multi-Layer Perceptron (EHR)</h3>
-              <p>Encodes structured clinical risk factor variables.</p>
-            </div>
-          </div>
-          <p style={{ fontSize: 13, color: '#637b86', marginTop: 12 }}>
-            Processes patient age, blood pressure, serum cholesterol, max heart rate, and chest pain classification into a normalized 64-dimensional clinical vector.
-          </p>
-        </div>
-
-        <div className="upload-card">
-          <div className="upload-title">
-            <BrainCircuit size={22} />
-            <div>
-              <h3>Late-Fusion Attention Layer</h3>
-              <p>Combines temporal, spatial, and tabular embeddings.</p>
-            </div>
-          </div>
-          <p style={{ fontSize: 13, color: '#637b86', marginTop: 12 }}>
-            Fuses latent features into a single representation vector, weighting modality relevance dynamically for joint risk prediction and explainability generation.
-          </p>
-        </div>
+        ))}
       </div>
 
       <section className="architecture" style={{ marginTop: 24, borderRadius: 14 }}>
         <div>
-          <div className="eyebrow">EXPLAINABILITY SUITE</div>
-          <h2>SHAP & Grad-CAM Visualization</h2>
+          <div className="eyebrow">EXPLANATIONS AND SUMMARY</div>
+          <h2>Every result shows its evidence</h2>
           <p style={{ marginTop: 10 }}>
-            Every prediction is coupled with explainable insights. Tabular clinical features are evaluated via SHAP values, while image and signal modalities generate Grad-CAM spatial/temporal heatmaps.
+            ECG predictions come with an Integrated Gradients heat map of the moments and leads that drove them. MRI results show the model's outline on the scan, and the diagnosis lists the measurements that were out of range. No public dataset has ECG, MRI and health records for the same patients, so the three results are combined by written rules into one attention level.
           </p>
         </div>
         <div className="arch-diagram">
-          <span>ECG Branch<br /><b>Grad-CAM Saliency</b></span>
-          <span>MRI Branch<br /><b>Spatial Attention</b></span>
-          <span>EHR Branch<br /><b>SHAP Value Ranking</b></span>
-          <strong>Unified Multimodal Explanation</strong>
+          <span>ECG<br /><b>Integrated Gradients</b></span>
+          <span>MRI<br /><b>Outlines + reasons</b></span>
+          <span>Health<br /><b>Guideline flags</b></span>
+          <strong>Rule-based summary: Low / Moderate / High</strong>
         </div>
       </section>
     </>
@@ -835,45 +806,66 @@ function ResearchPage() {
       <DemoNotice />
       <div className="page-title">
         <div>
-          <div className="eyebrow">CLINICAL BENCHMARKS</div>
-          <h1>Research Validation & Datasets</h1>
-          <p>Model training databases, prospective evaluation metrics, and clinical governance principles.</p>
+          <div className="eyebrow">RESEARCH</div>
+          <h1>Datasets and test results</h1>
+          <p>Every figure below is measured on patients the models never saw during training.</p>
         </div>
       </div>
 
       <div className="recent" style={{ marginTop: 24 }}>
-
         <div className="section-header">
-          <h2>Training Datasets</h2>
+          <h2>Training datasets</h2>
         </div>
         <table>
           <thead>
             <tr>
-              <th>Dataset Name</th>
-              <th>Modality</th>
-              <th>Sample Size</th>
-              <th>Annotation Type</th>
+              <th>Dataset</th>
+              <th>Data</th>
+              <th>Size</th>
+              <th>Labels used</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td><b>PTB-XL ECG Database</b></td>
-              <td>12-lead ECG Signals</td>
-              <td>21,837 clinical records</td>
-              <td>SCP-ECG Diagnostic Statements</td>
+              <td><b>PTB-XL</b> (Wagner et al., 2020)</td>
+              <td>12-lead ECG, 10 s</td>
+              <td>21,388 recordings; 2,158 held out for testing</td>
+              <td>Five diagnostic superclasses</td>
             </tr>
             <tr>
-              <td><b>UK Biobank CMR Cohort</b></td>
-              <td>Cardiac MRI DICOM</td>
-              <td>48,000+ MRI scans</td>
-              <td>Biventricular Segmentations</td>
+              <td><b>ACDC</b> (Bernard et al., 2018)</td>
+              <td>Short-axis cine MRI</td>
+              <td>150 patients: 100 training, 50 test</td>
+              <td>Expert outlines and five diagnoses</td>
             </tr>
             <tr>
-              <td><b>Structured EHR Dataset</b></td>
-              <td>Clinical Factors</td>
-              <td>303 cohort records</td>
-              <td>Angina & Ischemia Classifications</td>
+              <td><b>Health profile</b></td>
+              <td>Clinical values</td>
+              <td>No training data</td>
+              <td>ACC/AHA 2017 and NCEP ATP III guideline ranges</td>
             </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="recent" style={{ marginTop: 24 }}>
+        <div className="section-header">
+          <h2>Held-out test results</h2>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Measure</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><b>ECG classifier</b></td><td>Macro AUROC, five findings</td><td>0.911 (normal 0.941, MI 0.921, ST/T 0.930, conduction 0.924, hypertrophy 0.837)</td></tr>
+            <tr><td><b>ECG digitizer</b></td><td>Correlation with the original signal, flat scans</td><td>0.94</td></tr>
+            <tr><td><b>MRI segmenter</b></td><td>Dice overlap with expert outlines</td><td>LV 0.956, RV 0.933, myocardium 0.870 (end-diastole)</td></tr>
+            <tr><td><b>Ejection fraction</b></td><td>Agreement with expert values</td><td>r = 0.991</td></tr>
+            <tr><td><b>MRI diagnosis</b></td><td>Correct out of 50 test patients</td><td>45 (90%, 95% CI 79–96%)</td></tr>
           </tbody>
         </table>
       </div>

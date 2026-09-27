@@ -16,53 +16,53 @@ const modalitiesCardsData = [
   {
     icon: LineChart,
     frontTitle: 'ECG Signal',
-    frontDescription: '1D signal preprocessing and temporal feature extraction via 1D CNN + BiLSTM.',
+    frontDescription: 'A 12-lead recording or a scanned printout, classified by a 1D ResNet-18.',
     backTitle: 'ECG Analysis',
-    backContent: 'Processes 12-lead ECG signals to extract temporal and morphological features using deep learning.',
+    backContent: 'Reads 10 seconds of a 12-lead ECG and gives the probability of five diagnostic findings, with a heat map of the evidence.',
     backDetails: [
-      { label: 'Input', value: '12-lead ECG' },
-      { label: 'Processing', value: 'Filtering → Normalization → Feature Extraction' },
-      { label: 'Model', value: '1D CNN + BiLSTM' },
-      { label: 'Output', value: 'ECG-derived cardiac features' }
+      { label: 'Input', value: '12-lead ECG as CSV, or a flat scan of a 12x1 printout' },
+      { label: 'Processing', value: 'Digitizer for printouts → 10 s at 100 Hz → per-lead scaling' },
+      { label: 'Model', value: 'xresnet1d18 (1D ResNet-18), calibrated' },
+      { label: 'Output', value: 'Five findings with probabilities + Integrated Gradients map' }
     ]
   },
   {
     icon: Image,
     frontTitle: 'Cardiac MRI',
-    frontDescription: 'Image preparation and spatial feature extraction using 2D/3D ResNet.',
+    frontDescription: 'Short-axis MRI outlined by a 2.5D U-Net, then measured.',
     backTitle: 'Cardiac MRI Analysis',
-    backContent: 'Analyzes cardiac MRI images to identify spatial patterns and structural cardiac characteristics.',
+    backContent: 'Outlines the heart chambers on every slice, measures how well the heart pumps, and suggests one of five diagnoses.',
     backDetails: [
-      { label: 'Input', value: 'Cardiac MRI' },
-      { label: 'Processing', value: 'Preprocessing → Segmentation → Feature Extraction' },
-      { label: 'Model', value: '2D/3D ResNet' },
-      { label: 'Output', value: 'Spatial cardiac features' }
+      { label: 'Input', value: 'Two short-axis volumes: heart full and heart squeezed' },
+      { label: 'Processing', value: 'Segment LV, RV, myocardium → volumes, EF, mass' },
+      { label: 'Model', value: '2.5D U-Net + measurement-based classifier' },
+      { label: 'Output', value: 'Ejection fraction, volumes and diagnosis with reasons' }
     ]
   },
   {
     icon: ClipboardList,
     frontTitle: 'Health Profile',
-    frontDescription: 'Structured clinical risk-factor processing with deep neural networks.',
-    backTitle: 'Health Profile Analysis',
-    backContent: 'Processes structured clinical and health information to capture cardiovascular risk factors.',
+    frontDescription: 'Blood pressure, cholesterol and symptoms checked against clinical guidelines.',
+    backTitle: 'Health Profile Check',
+    backContent: 'Compares each value with published clinical guidelines and explains every flag in words.',
     backDetails: [
-      { label: 'Input', value: 'Clinical/EHR data' },
-      { label: 'Features', value: 'Demographic and clinical risk factors' },
-      { label: 'Model', value: 'Deep Neural Network' },
-      { label: 'Output', value: 'Tabular clinical features' }
+      { label: 'Input', value: 'Age, sex, BP, cholesterol, max heart rate, symptoms' },
+      { label: 'Guidelines', value: 'ACC/AHA 2017 (BP), NCEP ATP III (cholesterol)' },
+      { label: 'Method', value: 'Guideline rules, not a trained model' },
+      { label: 'Output', value: 'Risk flags: ok, moderate or high, with reasons' }
     ]
   },
   {
     icon: BrainCircuit,
-    frontTitle: 'Late Fusion',
-    frontDescription: 'A unified multimodal representation combining temporal, spatial, and tabular features.',
-    backTitle: 'Multimodal Fusion',
-    backContent: 'Combines complementary information from ECG, cardiac MRI, and health-profile models into a unified representation for cardiovascular prediction.',
+    frontTitle: 'Combined Summary',
+    frontDescription: 'All three results brought together into one attention level.',
+    backTitle: 'Multimodal Summary',
+    backContent: 'No public dataset has ECG, MRI and health records for the same patients, so the three results are combined by written rules shown with every result.',
     backDetails: [
-      { label: 'ECG', value: 'Temporal features' },
-      { label: 'MRI', value: 'Spatial features' },
-      { label: 'EHR', value: 'Tabular features' },
-      { label: 'Output', value: 'Unified multimodal representation' }
+      { label: 'ECG', value: 'Findings above set probability thresholds' },
+      { label: 'MRI', value: 'Ejection fraction and diagnosis' },
+      { label: 'Health', value: 'Guideline flags' },
+      { label: 'Output', value: 'Attention level Low / Moderate / High, with reasons' }
     ]
   }
 ]
@@ -168,29 +168,29 @@ function Landing({ enter, signIn }) {
         <section className="architecture" id="technology">
           <div>
             <div className="eyebrow">SYSTEM ARCHITECTURE & TECHNOLOGY</div>
-            <h2>Multimodal learning with transparent insight.</h2>
+            <h2>Three analyses, each one explained.</h2>
             <p style={{ marginTop: 12 }}>
-              ECG signals (1D CNN + BiLSTM), Cardiac MRI DICOM slices (CNN), and EHR clinical variables (Dense NN) are brought together through late fusion, with clear explanation views for clinical variables, ECG temporal regions, and MRI spatial attention.
+              ECG recordings go to a 1D ResNet-18 trained on PTB-XL; paper printouts are first turned back into signals by a CNN trace digitizer. Cardiac MRI is outlined by a 2.5D U-Net trained on ACDC, and the outlines give chamber volumes, ejection fraction and a five-way diagnosis. Health values are checked against clinical guidelines. The three results are then combined by written rules into one attention level.
             </p>
 
             <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div style={{ background: 'rgba(255,255,255,0.06)', padding: 16, borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)' }}>
-                <h4 style={{ color: '#82e3e5', margin: '0 0 6px' }}>SHAP Variable Importance</h4>
-                <p style={{ fontSize: 12, color: '#b4cbd2', margin: 0 }}>Quantifies individual EHR risk factor contribution (cholesterol, blood pressure, age) to the risk score.</p>
+                <h4 style={{ color: '#82e3e5', margin: '0 0 6px' }}>Integrated Gradients (ECG)</h4>
+                <p style={{ fontSize: 12, color: '#b4cbd2', margin: 0 }}>Shows which moments of each lead pushed the prediction up or down, and which leads the model relied on most.</p>
               </div>
               <div style={{ background: 'rgba(255,255,255,0.06)', padding: 16, borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)' }}>
-                <h4 style={{ color: '#82e3e5', margin: '0 0 6px' }}>Grad-CAM Saliency Maps</h4>
-                <p style={{ fontSize: 12, color: '#b4cbd2', margin: 0 }}>Visual heatmaps highlighting myocardial tissue regions in MRI and temporal segments in 12-lead ECG.</p>
+                <h4 style={{ color: '#82e3e5', margin: '0 0 6px' }}>Outlines and reasons (MRI)</h4>
+                <p style={{ fontSize: 12, color: '#b4cbd2', margin: 0 }}>Every MRI result shows the model's outline on the scan, and the diagnosis lists the measurements that were out of range.</p>
               </div>
             </div>
           </div>
           <div className="arch-diagram">
-            <span>ECG<br /><b>1D CNN + LSTM</b></span>
-            <span>MRI<br /><b>CNN ResNet</b></span>
-            <span>EHR<br /><b>Dense NN</b></span>
-            <strong>Late Fusion Transformer Layer</strong>
-            <strong>Risk Prediction (Low / Moderate / High)</strong>
-            <strong>SHAP + Grad-CAM Explainability</strong>
+            <span>ECG<br /><b>1D ResNet-18</b></span>
+            <span>MRI<br /><b>2.5D U-Net</b></span>
+            <span>Health<br /><b>Guideline checks</b></span>
+            <strong>Rule-based multimodal summary</strong>
+            <strong>Attention level (Low / Moderate / High)</strong>
+            <strong>Heat maps · outlines · reasons</strong>
           </div>
         </section>
 
@@ -201,7 +201,7 @@ function Landing({ enter, signIn }) {
             <div className="eyebrow">RESEARCH & CLINICAL GOVERNANCE</div>
             <h2>Responsible research by design.</h2>
             <p>
-              Clinical validation, governance, calibrated performance evaluation, and privacy controls are required before any real-world clinical use. Models are developed for evaluation on PTB-XL ECG and UK Biobank Cardiac MRI cohorts.
+              The models are trained and tested on public datasets: PTB-XL for ECG (21,388 recordings, with 2,158 held out for testing) and ACDC for cardiac MRI (100 training and 50 test patients). Every figure on this site is a held-out test result. Clinical validation, governance and privacy controls would be required before any real-world clinical use.
             </p>
           </div>
         </section>

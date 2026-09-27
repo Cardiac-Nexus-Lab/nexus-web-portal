@@ -74,7 +74,7 @@ export function FusionCard() {
       </div>
 
       <svg className="fc-diagram" viewBox="0 0 520 300" role="img"
-        aria-label="ECG, MRI and health-record inputs flowing into a single fusion model">
+        aria-label="ECG, MRI and health-record results combined into one patient view">
         <defs>
           <clipPath id="fc-clip-ecg"><rect x="132" y="20" width="80" height="60" /></clipPath>
           <clipPath id="fc-clip-mri"><circle cx="176" cy="152" r="20" /></clipPath>
