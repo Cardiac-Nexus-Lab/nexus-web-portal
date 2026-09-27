@@ -152,7 +152,7 @@ p { line-height: 1.6; }
   align-items: center;
   max-width: 1170px;
   margin: auto;
-  padding: 95px 25px 105px;
+  padding: 65px 25px 105px;
 }
 .hero h1 {
   font-size: clamp(39px, 5vw, 65px);

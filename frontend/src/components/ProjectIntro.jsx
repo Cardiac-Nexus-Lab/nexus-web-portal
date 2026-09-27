@@ -5,7 +5,7 @@ import { GUIDE, TEAM } from './TeamPage';
 const clamp = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
 
 /*
- * The first screen of the landing page: project guide and team, centred.
+ * A compact band at the top of the landing page: project guide and team, centred.
  * Lines rise in one at a time on load, as on the team page. Scrolling away
  * writes progress to one CSS variable, --p, which lifts and fades the block
  * so it hands over to the hero without re-rendering React.
@@ -38,15 +38,14 @@ export function ProjectIntro() {
       <div className="pi-inner">
         <p className="pi-eyebrow pi-in" style={{ '--d': '0.1s' }}>Project Guide</p>
         <h2 className="pi-guide pi-in" style={{ '--d': '0.25s' }}>{GUIDE.name}</h2>
-        <p className="pi-role pi-in" style={{ '--d': '0.4s' }}>{GUIDE.role}</p>
-        <p className="pi-dept pi-in" style={{ '--d': '0.5s' }}>{GUIDE.department}</p>
+        <p className="pi-role pi-in" style={{ '--d': '0.4s' }}>
+          {GUIDE.role} <span aria-hidden="true">·</span> <span className="pi-dept">{GUIDE.department}</span>
+        </p>
 
-        <span className="pi-rule pi-in" style={{ '--d': '0.65s' }} aria-hidden="true" />
-
-        <p className="pi-eyebrow pi-in" style={{ '--d': '0.75s' }}>Team Members</p>
+        <p className="pi-eyebrow pi-team-label pi-in" style={{ '--d': '0.55s' }}>Team Members</p>
         <ol className="pi-list">
           {TEAM.map((member, i) => (
-            <li key={member.usn} className="pi-in" style={{ '--d': `${0.9 + i * 0.14}s` }}>
+            <li key={member.usn} className="pi-in" style={{ '--d': `${0.65 + i * 0.1}s` }}>
               <span className="pi-num">{String(i + 1).padStart(2, '0')}</span>
               <span className="pi-name">{member.name}</span>
               <span className="pi-usn">{member.usn}</span>
@@ -54,7 +53,6 @@ export function ProjectIntro() {
           ))}
         </ol>
       </div>
-      <a className="pi-scroll" href="#start" aria-label="Scroll to the platform"><i /></a>
     </section>
   );
 }
