@@ -1,3 +1,4 @@
+import './api-fetch'
 import React, { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ArrowRight, BrainCircuit, ChevronRight, ClipboardList, HeartPulse, Image, LineChart, ShieldCheck } from 'lucide-react'
