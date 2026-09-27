@@ -15,8 +15,16 @@ PTB-XL (Wagner et al., *Scientific Data* 2020) is licensed CC BY 4.0.
 
 ## MRI samples
 
-ACDC data may not be redistributed, so the MRI files are not committed. After
-fetching ACDC in `nexus-ai-engine` (`python -c "from cardiac_nexus import mri_data; mri_data.fetch_acdc()"`
+ACDC data may not be redistributed, so the MRI files are not committed. The
+quickest way to get the pair is straight from the public Hugging Face mirror, run
+from this folder (works in macOS Terminal and Windows Command Prompt):
+
+```bash
+curl -L -o mri_patient106_ed.nii.gz https://huggingface.co/datasets/viennh2012/cardiac_cine_acdc/resolve/main/test/patient106/patient106_sax_ed.nii.gz
+curl -L -o mri_patient106_es.nii.gz https://huggingface.co/datasets/viennh2012/cardiac_cine_acdc/resolve/main/test/patient106/patient106_sax_es.nii.gz
+```
+
+Alternatively, after fetching all of ACDC in `nexus-ai-engine` (`python -c "from cardiac_nexus import mri_data; mri_data.fetch_acdc()"`
 from its `src` directory, or any run of `scripts/train_mri.py`), copy them here:
 
 ```bash

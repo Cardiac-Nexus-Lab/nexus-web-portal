@@ -2,14 +2,14 @@ import React, { useEffect, useRef } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import './team-page.css';
 
-const GUIDE = {
+export const GUIDE = {
   name: 'Dr. Shrihari M R',
   role: 'Associate Professor',
   department: 'Department of CSE',
   photo: '/guide-shrihari.jpg',
 };
 
-const TEAM = [
+export const TEAM = [
   { name: 'Sahana N S', usn: '1SJ23CS143' },
   { name: 'Samhitha P', usn: '1SJ23CS146' },
   { name: 'Vishnu R', usn: '1SJ23CS190' },

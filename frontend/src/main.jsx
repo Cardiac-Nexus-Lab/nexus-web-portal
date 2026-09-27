@@ -4,6 +4,7 @@ import { ArrowRight, BrainCircuit, ChevronRight, ClipboardList, HeartPulse, Imag
 import './styles.css'
 import { ExplodedHeart } from './components/ExplodedHeart'
 import { TeamPage } from './components/TeamPage'
+import { ProjectIntro } from './components/ProjectIntro'
 import { FusionCard } from './components/FusionCard'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { auth } from './firebase'
@@ -115,15 +116,15 @@ function ModalityCard({ card }) {
 function Badge({ children, tone = 'blue' }) { return <span className={`badge ${tone}`}>{children}</span> }
 function Logo() { return <div className="logo"><span><HeartPulse size={22}/></span><div>Cardiac <b>Nexus</b><small>EXPLAINABLE CARDIOVASCULAR AI</small></div></div> }
 
-function Landing({ enter, signIn, openTeam }) {
+function Landing({ enter, signIn }) {
   return (
     <div className="public">
       <header>
         <Logo />
-        <button type="button" className="college" onClick={openTeam} aria-label="SJC Institute of Technology: project guide and team">
+        <div className="college">
           <img src="/sjcit-logo.png" alt="" onError={e => { e.currentTarget.hidden = true }} />
           <span>SJC Institute of Technology</span>
-        </button>
+        </div>
         <nav>
           <a href="#heart">The heart</a>
           <a href="#how">How it works</a>
@@ -134,7 +135,9 @@ function Landing({ enter, signIn, openTeam }) {
         </nav>
       </header>
       <main>
-        <section className="hero">
+        <ProjectIntro />
+
+        <section className="hero" id="start">
           <div className="hero-copy">
             <Badge>Multimodal cardiovascular research platform</Badge>
             <h1>AI-assisted risk assessment with <em>explainable</em> insight.</h1>
@@ -275,24 +278,11 @@ function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  // Opened from the site: Back returns to the previous history entry. Opened
-  // directly by URL there is nothing to go back to, so go to the landing page.
-  const openedFromSite = React.useRef(false);
-
-  const openTeam = () => {
-    openedFromSite.current = true;
-    window.history.pushState(null, '', TEAM_HASH);
-    setView('team');
-  };
-
+  // The team page is reached only by its URL; the landing page shows the same
+  // guide and team in its first section.
   const closeTeam = () => {
-    if (openedFromSite.current) {
-      openedFromSite.current = false;
-      window.history.back();
-    } else {
-      window.history.replaceState(null, '', window.location.pathname);
-      setView('public');
-    }
+    window.history.replaceState(null, '', window.location.pathname);
+    setView('public');
   };
 
   const handleAuthSuccess = (userData, accessToken) => {
@@ -318,7 +308,7 @@ function App() {
   }
 
   if (view === 'public') {
-    return <Landing enter={() => setView('auth')} signIn={() => setView('auth')} openTeam={openTeam} />;
+    return <Landing enter={() => setView('auth')} signIn={() => setView('auth')} />;
   }
 
   if (view === 'auth' || (!user && view === 'dashboard')) {
