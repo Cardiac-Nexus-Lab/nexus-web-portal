@@ -93,12 +93,11 @@ cd nexus-web-portal\backend
 py -3.11 -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 copy .env.example .env
-set DATABASE_URL=sqlite:///./cardiac_nexus_local.db
 .venv\Scripts\python -m uvicorn main:app --port 8000 --reload
 ```
 
-`run.sh` uses a local SQLite file unless `DATABASE_URL` is set, and reloads
-automatically when code changes. To use PostgreSQL instead, set
+The copied `.env` uses a local SQLite file, which needs no setup; `run.sh` also
+reloads automatically when code changes. To use PostgreSQL instead, set
 `DATABASE_URL=postgresql://user:password@localhost:5432/cardiac_nexus`.
 
 ### Frontend
