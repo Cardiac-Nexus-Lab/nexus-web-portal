@@ -137,6 +137,56 @@ def _png(fig) -> str:
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
 
+# Checks that an upload is an ECG at all. The classifier has no "not an ECG" answer, so without
+# them a logo or random numbers get a confident diagnosis. Thresholds were set by scoring the
+# 2,158 PTB-XL test recordings, 40 rendered printouts and 60 unrelated images and photos.
+LIMB_LEAD_MIN_TABLE = 0.9    # every real recording scored 1.00; random numbers 0.00
+LIMB_LEAD_MIN_IMAGE = 0.6    # flat printouts scored 0.87 or more; unrelated images 0.47 or less
+LOW_CONFIDENCE_MAX_IMAGE = 0.3  # printouts had at most 22% of the trace read with low confidence
+COPIED_LEADS_MAX = 0.5       # real recordings had at most 9% of lead pairs near-identical
+
+
+def limb_lead_consistency(signal: np.ndarray) -> float:
+    """How well leads III, aVR, aVL and aVF follow from leads I and II (mean R^2).
+
+    Einthoven's and Goldberger's laws make those four leads linear combinations of I and II
+    in any real recording, whatever the patient's condition. Unrelated data has no reason to
+    obey them. R^2 with an intercept is unchanged by per-lead standardization.
+    """
+    basis = np.stack([signal[0], signal[1], np.ones(signal.shape[1])], axis=1)
+    scores = []
+    for lead in (2, 3, 4, 5):
+        target = signal[lead]
+        coef, *_ = np.linalg.lstsq(basis, target, rcond=None)
+        residual = ((target - basis @ coef) ** 2).sum()
+        scores.append(1.0 - residual / (((target - target.mean()) ** 2).sum() + 1e-9))
+    return float(np.mean(scores))
+
+
+def copied_lead_share(signal: np.ndarray) -> float:
+    """Share of lead pairs that are near-identical, as when every row of a blank page reads the same."""
+    with np.errstate(invalid="ignore", divide="ignore"):
+        correlation = np.nan_to_num(np.corrcoef(signal))
+    upper = np.triu_indices(signal.shape[0], 1)
+    return float(np.mean(np.abs(correlation[upper]) > 0.99))
+
+
+def check_is_ecg(signal: np.ndarray, from_image: bool, low_confidence: float = 0.0) -> None:
+    """Raise InputError when the signal cannot be a 12-lead ECG."""
+    what = "image" if from_image else "file"
+    hint = ("Upload a flat, front-on scan of a 12x1 ECG printout." if from_image
+            else "Upload a 12-lead ECG with the leads in the standard order I, II, III, aVR, aVL, aVF, V1-V6.")
+    if from_image and low_confidence > LOW_CONFIDENCE_MAX_IMAGE:
+        raise InputError(f"This {what} does not look like an ECG printout: no clear trace was found in "
+                         f"{low_confidence:.0%} of it. {hint}")
+    if copied_lead_share(signal) > COPIED_LEADS_MAX:
+        raise InputError(f"This {what} does not look like an ECG: most of its 12 leads are identical. {hint}")
+    consistency = limb_lead_consistency(signal)
+    if consistency < (LIMB_LEAD_MIN_IMAGE if from_image else LIMB_LEAD_MIN_TABLE):
+        raise InputError(f"This {what} does not look like a 12-lead ECG: leads III, aVR, aVL and aVF do not "
+                         f"follow from leads I and II as they must in a real recording (Einthoven's law; "
+                         f"consistency {consistency:.2f}). {hint}")
+
 
 def _lead_key(name: str) -> str:
     return str(name).strip().upper().replace("LEAD", "").replace("_", "").replace(" ", "")
@@ -230,11 +280,13 @@ def analyze_ecg(filename: str, data: bytes) -> dict:
             raise InputError("The ECG image could not be opened.")
         digitized = digitize_page(image, m["localizer"], DEVICE)
         signal = digitized.signal[:, :ECG_SAMPLES].astype(np.float32)
+        check_is_ecg(signal, from_image=True, low_confidence=float((digitized.confidence < 0.15).mean()))
         source = {"type": "image", "evidence": MODEL_EVIDENCE["ecg_image"]}
         notes += digitized.warnings
         notes.append("Read from an image: works best on a flat, front-on scan of a 12x1 printout.")
     else:
         signal, table_notes = read_ecg_table(data)
+        check_is_ecg(signal, from_image=False)
         notes += table_notes
         source = {"type": "signal"}
 
@@ -296,9 +348,13 @@ def _load_nifti(filename: str, data: bytes) -> dict:
     with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
         handle.write(data)
         handle.flush()
-        image = nib.load(handle.name)
-        array = np.asarray(image.dataobj, dtype=np.float32)
-        zooms = tuple(float(z) for z in image.header.get_zooms()[:3])
+        try:
+            image = nib.load(handle.name)
+            array = np.asarray(image.dataobj, dtype=np.float32)
+            zooms = tuple(float(z) for z in image.header.get_zooms()[:3])
+        except Exception as error:
+            raise InputError(f"{filename} could not be read as a NIfTI file; it may be damaged or "
+                             f"not a NIfTI file at all.") from error
     if array.ndim == 4:
         raise InputError(f"{filename} is a 4D cine series. Upload the end-diastole and end-systole "
                          f"frames as two separate 3D files.")
@@ -315,8 +371,12 @@ def _load_slice(filename: str, data: bytes) -> dict:
     if lower.endswith(".dcm"):
         import pydicom
 
-        dataset = pydicom.dcmread(io.BytesIO(data))
-        pixels = dataset.pixel_array.astype(np.float32)
+        try:
+            dataset = pydicom.dcmread(io.BytesIO(data))
+            pixels = dataset.pixel_array.astype(np.float32)
+        except Exception as error:
+            raise InputError(f"{filename} could not be read as a DICOM image; it may be damaged or "
+                             f"hold no pixel data.") from error
         if pixels.ndim != 2:
             raise InputError(f"{filename} holds more than one frame; upload a single short-axis slice.")
         spacing = [float(v) for v in getattr(dataset, "PixelSpacing", [0, 0])]
@@ -370,6 +430,25 @@ def _mri_figure(panels: list[tuple[str, np.ndarray, np.ndarray]]) -> str:
     return _png(fig)
 
 
+# A short-axis left ventricle is a cavity ringed by myocardium. Every one of the 100 ACDC test
+# volumes met both limits; none of 29 unrelated photos, logos and printouts did.
+LV_MIN_PIXELS = 200       # at 1 mm per pixel, 2 cm^2; real mid-ventricle slices were 530 or more
+MYO_RING_MIN_SHARE = 0.5  # share of the band around the cavity segmented as myocardium
+
+
+def looks_like_heart(mask: np.ndarray) -> bool:
+    """True if some slice has a left ventricle of plausible size wrapped in myocardium."""
+    kernel = np.ones((5, 5), np.uint8)
+    for labels in mask:
+        cavity = (labels == 3).astype(np.uint8)
+        if cavity.sum() < LV_MIN_PIXELS:
+            continue
+        band = cv2.dilate(cavity, kernel) - cavity
+        if (labels[band > 0] == 2).mean() >= MYO_RING_MIN_SHARE:
+            return True
+    return False
+
+
 def _middle_slice(mask: np.ndarray) -> int:
     areas = (mask == 3).sum(axis=(1, 2))
     return int(np.argmax(areas)) if areas.any() else len(mask) // 2
@@ -401,6 +480,11 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
     for item in loaded:
         item["mask"] = _segment(item["volume"])
         item["ml"] = structure_volumes_ml(item["mask"], item["spacing"])
+        # Photos, logos and ECG printouts would otherwise reach the summary as an MRI with nothing
+        # wrong; the segmenter even marks small "ventricles" in some of them.
+        if not looks_like_heart(item["mask"]):
+            raise InputError(f"No heart was found in {item['name']}. Upload a short-axis cardiac MRI: two "
+                             f"NIfTI volumes (end-diastole and end-systole), or a DICOM or image slice.")
 
     volumetric = [item for item in loaded if item["volume"].shape[0] > 1]
     result: dict = {"evidence": MODEL_EVIDENCE["mri"], "notes": notes}
@@ -458,8 +542,6 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
             notes.append("Pixel size was unknown, so the image was rescaled; the outline is approximate.")
         result["segmentation_image"] = _mri_figure([(item["name"], item["volume"][index], item["mask"][index])])
 
-    if not any((item["mask"] == 3).any() for item in loaded):
-        notes.append("No left ventricle was found. Check that the image is a short-axis cardiac MRI.")
     return result
 
 

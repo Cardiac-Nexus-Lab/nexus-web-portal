@@ -145,6 +145,22 @@ MRI pair (ACDC may not be redistributed). With the MI ECG, the patient 106 MRI
 pair and height 181 cm, weight 91 kg, expect myocardial infarction around 95%,
 ejection fraction around 9% and dilated cardiomyopathy.
 
+## Input checks
+
+The models have no "this is not an ECG / MRI" answer, so uploads are checked first and
+rejected with an explanation:
+
+- **ECG:** leads III, aVR, aVL and aVF must follow from leads I and II (Einthoven's
+  law), which holds in every real recording whatever the diagnosis. All 2,158 PTB-XL
+  test recordings pass; random numbers, photos and logos do not. Images must also have
+  a clearly readable trace, and the 12 leads must not be copies of each other.
+- **MRI:** some slice must show a left ventricle of plausible size ringed by
+  myocardium. All 100 ACDC test volumes pass; unrelated photos, logos and ECG
+  printouts do not. Damaged NIfTI or DICOM files get a clear message.
+
+The thresholds are listed, with the data they came from, at the top of the checks in
+`backend/cardiac_ai.py`.
+
 ## Known limitations
 
 - The Patients page still shows placeholder rows.
