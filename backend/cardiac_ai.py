@@ -15,7 +15,9 @@ a model output.
 
 There is no trained fusion model yet: no public dataset pairs ECG, MRI and
 health records for the same patients. The summary therefore combines the three
-with explicit rules, and says so in its output.
+with explicit rules, and says so in its output. Where the ECG and MRI models name
+the same diagnosis, it also shows a likelihood-ratio update of the ECG probability
+by the MRI result, labelled with the untested independence assumption behind it.
 """
 
 from __future__ import annotations
@@ -121,6 +123,9 @@ def models() -> dict:
         "segmenter": segmenter,
         # Our own artefact, saved by scripts/diagnose_mri.py; never load joblib from elsewhere.
         "diagnosis": joblib.load(results / "mri_diagnosis" / "diagnosis_model.joblib"),
+        # Written by nexus-ai-engine's scripts/fusion_likelihood_ratios.py; absent in older engine checkouts.
+        "likelihood_ratios": (json.loads((results / "fusion" / "likelihood_ratios.json").read_text())
+                              if (results / "fusion" / "likelihood_ratios.json").exists() else None),
     }
 
 
@@ -607,6 +612,54 @@ def assess_clinical(age: int, gender: str, blood_pressure: int, cholesterol: int
 # Summary
 # ----------------------------------------------------------------------------
 
+def combine_ecg_mri(ecg: dict, mri: dict, ratios: dict | None) -> list[dict]:
+    """Update the ECG probability of a diagnosis with the MRI classifier's likelihood ratio.
+
+    Only for diagnoses both models name (ECG MI with MRI infarction, ECG HYP with
+    MRI HCM). The second is a loose match, so it is applied only when the MRI
+    calls HCM. The calibrated ECG probability is taken as
+    the prior; the MRI classifier's call is the evidence, weighted by a likelihood
+    ratio estimated from out-of-fold predictions on ACDC training patients:
+
+        posterior odds = ECG odds x LR+   if the MRI calls that diagnosis
+        posterior odds = ECG odds x LR-   if it calls another one
+
+    This is exact only if, given the true diagnosis, the ECG and MRI findings are
+    independent. No public dataset pairs ECG and MRI for the same patients, so that
+    assumption is untested and the combined number is not a validated or
+    calibrated probability. The range comes from the likelihood ratio's 95%
+    interval alone; it ignores uncertainty in the ECG probability.
+    """
+    if not ratios or "diagnosis" not in mri:
+        return []
+    ecg_probability = {f["code"]: f["probability"] for f in ecg["findings"]}
+    mri_call = mri["diagnosis"]["probabilities"][0]["code"]
+    combined = []
+    for mri_class, entry in ratios["pairs"].items():
+        prior = ecg_probability.get(entry["ecg_class"])
+        if prior is None:
+            continue
+        prior = min(max(prior, 1e-4), 1 - 1e-4)
+        odds = prior / (1 - prior)
+        called = mri_call == mri_class
+        if not called and not entry.get("update_when_not_called", True):
+            continue  # e.g. no HCM call says little about ECG hypertrophy from other causes
+        ratio = entry["lr_positive"] if called else entry["lr_negative"]
+        low, high = entry["lr_positive_95ci"] if called else entry["lr_negative_95ci"]
+        to_probability = lambda lr: odds * lr / (1 + odds * lr)
+        combined.append({
+            "ecg_class": entry["ecg_class"], "mri_class": mri_class, "mri_called": called,
+            "ecg_probability": round(prior, 4), "likelihood_ratio": round(ratio, 3),
+            "combined_probability": round(to_probability(ratio), 4),
+            "range": [round(to_probability(low), 4), round(to_probability(high), 4)],
+            "text": (f"ECG {CLASS_LABELS.get(entry['ecg_class'], entry['ecg_class']).lower()} {prior:.0%}; "
+                     f"MRI {'calls' if called else 'does not call'} {DIAGNOSIS_LABELS[mri_class].lower()} "
+                     f"(likelihood ratio {ratio:.2g}). Combined: {to_probability(ratio):.0%} "
+                     f"(range {to_probability(low):.0%}-{to_probability(high):.0%})."),
+        })
+    return combined
+
+
 def summarize(ecg: dict, mri: dict, clinical: dict) -> dict:
     reasons = []
 
@@ -643,9 +696,17 @@ def summarize(ecg: dict, mri: dict, clinical: dict) -> dict:
     if not reasons:
         reasons.append({"level": "ok", "modality": "All",
                         "text": "No finding crossed the thresholds used for this summary."})
+    combined = combine_ecg_mri(ecg, mri, models().get("likelihood_ratios"))
     return {
         "attention": attention,
         "reasons": reasons,
+        "combined": combined,
+        "combined_method": ("Bayesian update of the ECG probability by the MRI classifier's likelihood ratio, "
+                            "only where both models name the same diagnosis. It assumes the ECG and MRI findings "
+                            "are independent given the true diagnosis; no public dataset pairs ECG and MRI for the "
+                            "same patients, so this is untested and the combined figure is not a validated "
+                            "probability. The attention level above still comes from the listed thresholds.")
+                           if combined else None,
         "method": "Each modality is analysed by its own trained model. No trained fusion model exists yet, "
                   "because no public dataset pairs ECG, MRI and health records for the same patients, so this "
                   "summary combines the results with the explicit thresholds listed here.",

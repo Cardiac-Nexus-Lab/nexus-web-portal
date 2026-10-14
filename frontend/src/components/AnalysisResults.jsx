@@ -108,6 +108,21 @@ export function ResultsView({ result, setPage }) {
             ))}
           </ul>
           <p className="ar-method">{summary.method}</p>
+          {summary.combined?.length > 0 && (
+            <>
+              <h2>ECG and MRI together</h2>
+              <ul>
+                {summary.combined.map(item => (
+                  <li key={item.mri_class}>
+                    <i className="ar-dot info" />
+                    <em>ECG+MRI</em>
+                    <span>{item.text}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="ar-method">{summary.combined_method}</p>
+            </>
+          )}
         </div>
       </section>
 
@@ -225,6 +240,8 @@ export function buildReport(r) {
     `ATTENTION LEVEL: ${r.summary.attention}`,
     ...r.summary.reasons.map(x => `  - [${x.modality}] ${x.text}`),
     `  Method: ${r.summary.method}`,
+    ...(r.summary.combined || []).map(x => `  - [ECG+MRI] ${x.text}`),
+    ...(r.summary.combined?.length ? [`  ECG+MRI method: ${r.summary.combined_method}`] : []),
     '',
     'ECG',
     ...r.ecg.findings.map(f => `  ${f.label.padEnd(26)} ${pct(f.probability).padStart(5)}`),
@@ -378,6 +395,20 @@ export function ReportView({ result }) {
           </ul>
         </div>
         <p className="rp-small">{summary.method}</p>
+        {summary.combined?.length > 0 && (
+          <>
+            <ul>
+              {summary.combined.map(item => (
+                <li key={item.mri_class}>
+                  <i className="ar-dot info" />
+                  <em>ECG+MRI</em>
+                  <span>{item.text}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="rp-small">{summary.combined_method}</p>
+          </>
+        )}
 
         <h2>2. Clinical values</h2>
         <p className="rp-small">{clinical.method}</p>

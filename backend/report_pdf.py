@@ -276,6 +276,10 @@ def build_report_pdf(result: dict) -> bytes:
                              ("LINEBEFORE", (0, 0), (0, -1), 4, ink), ("TOPPADDING", (0, 0), (-1, -1), 6),
                              ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
     story += [_p("1. Summary", "h2"), box, Spacer(1, 2 * mm), _p(summary["method"], "small")]
+    if summary.get("combined"):
+        story += [Spacer(1, 2 * mm), _p("ECG and MRI together", "cellb")]
+        story += [_p(item["text"], "cell") for item in summary["combined"]]
+        story += [_p(summary["combined_method"], "small")]
 
     # Clinical
     clinical = result["clinical"]
