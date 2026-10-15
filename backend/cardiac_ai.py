@@ -75,8 +75,10 @@ DIAGNOSIS_LABELS = {
 MODEL_EVIDENCE = {
     "ecg": "Tested on 2,158 unseen PTB-XL recordings: macro AUROC 0.911, calibrated (mean ECE 0.015).",
     "ecg_image": "Digitizer recovers the waveform at 0.94 correlation from flat scans; angled photos are unreliable.",
-    "mri": "Tested on 50 unseen ACDC patients: left ventricle Dice 0.956, ejection fraction r 0.991 against experts.",
-    "diagnosis": "45 of 50 unseen ACDC patients diagnosed correctly (95% interval 79%-96%).",
+    "mri": ("Tested on 346 unseen patients from three cohorts and several scanner vendors: left ventricle Dice "
+            "0.937-0.954, ejection fraction error 3-4 points against experts; 5.7 points against clinicians on "
+            "439 external Kaggle patients."),
+    "diagnosis": "43 of 50 unseen ACDC patients diagnosed correctly from the model's outlines (95% interval 74%-93%).",
 }
 
 
@@ -107,8 +109,12 @@ def models() -> dict:
     report = json.loads((results / "local_xresnet18_full" / "evaluation_report.json").read_text())
     calibration = report["vector_scaling"]
 
-    mri_checkpoint = torch.load(results / "mri_segmentation" / "mri_segmenter.pt",
-                                map_location=DEVICE, weights_only=True)
+    # The pooled model (ACDC, M&Ms and M&Ms-2) generalises far better to other scanners than the ACDC-only
+    # one; older engine checkouts only have the latter.
+    mri_path = results / "mri_segmentation_pooled" / "mri_segmenter.pt"
+    if not mri_path.exists():
+        mri_path = results / "mri_segmentation" / "mri_segmenter.pt"
+    mri_checkpoint = torch.load(mri_path, map_location=DEVICE, weights_only=True)
     segmenter = MRISegmenter(in_channels=mri_checkpoint["in_channels"], num_classes=mri_checkpoint["num_classes"],
                              widths=tuple(mri_checkpoint["widths"]))
     segmenter.load_state_dict(mri_checkpoint["model_state_dict"])
@@ -438,8 +444,9 @@ def _mri_figure(panels: list[tuple[str, np.ndarray, np.ndarray]]) -> str:
     return _png(fig)
 
 
-# A short-axis left ventricle is a cavity ringed by myocardium. Every one of the 100 ACDC test
-# volumes met both limits; none of 29 unrelated photos, logos and printouts did.
+# A short-axis left ventricle is a cavity ringed by myocardium. With the pooled model, all 692 test
+# volumes of ACDC, M&Ms and M&Ms-2 met both limits. None of 29 unrelated photos, logos and printouts
+# did with the earlier ACDC-only model; that rejection has not been re-run on the pooled model.
 LV_MIN_PIXELS = 200       # at 1 mm per pixel, 2 cm^2; real mid-ventricle slices were 530 or more
 MYO_RING_MIN_SHARE = 0.5  # share of the band around the cavity segmented as myocardium
 

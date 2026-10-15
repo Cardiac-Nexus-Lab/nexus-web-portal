@@ -154,7 +154,7 @@ rejected with an explanation:
   test recordings pass; random numbers, photos and logos do not. Images must also have
   a clearly readable trace, and the 12 leads must not be copies of each other.
 - **MRI:** some slice must show a left ventricle of plausible size ringed by
-  myocardium. All 100 ACDC test volumes pass; unrelated photos, logos and ECG
+  myocardium. All 692 ACDC, M&Ms and M&Ms-2 test volumes pass with the pooled model; unrelated photos, logos and ECG
   printouts do not. Damaged NIfTI or DICOM files get a clear message.
 
 The thresholds are listed, with the data they came from, at the top of the checks in
@@ -165,8 +165,11 @@ The thresholds are listed, with the data they came from, at the top of the check
 - The Patients page still shows placeholder rows.
 - ECG CSVs are assumed to span 10 seconds; the digitizer works on flat, front-on
   scans of 12x1 printouts, not angled photos.
-- MRI diagnosis was trained on 100 patients from one hospital (ACDC) and tested
-  on 50; its 95% interval is 79%–96%.
+- MRI segmentation uses the pooled model from nexus-ai-engine (ACDC, M&Ms, M&Ms-2).
+  The diagnosis classifier was still trained on ACDC alone and gets 43 of 50 ACDC test
+  patients right from the pooled model's outlines (95% interval 74%–93%); on other
+  hospitals' scans its accuracy is untested. Rejection of non-heart images was checked
+  with the earlier ACDC-only model and has not been re-run.
 - The summary uses rules, not a trained fusion model.
 
 ## Team

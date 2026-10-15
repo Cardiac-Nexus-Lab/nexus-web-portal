@@ -835,8 +835,20 @@ function ResearchPage() {
             <tr>
               <td><b>ACDC</b> (Bernard et al., 2018)</td>
               <td>Short-axis cine MRI</td>
-              <td>150 patients: 100 training, 50 test</td>
+              <td>150 patients: 80 training, 20 validation, 50 test</td>
               <td>Expert outlines and five diagnoses</td>
+            </tr>
+            <tr>
+              <td><b>M&amp;Ms and M&amp;Ms-2</b></td>
+              <td>Short-axis cine MRI, several vendors</td>
+              <td>680 patients: 310 training, 74 validation, 296 test</td>
+              <td>Expert outlines</td>
+            </tr>
+            <tr>
+              <td><b>Kaggle Data Science Bowl</b></td>
+              <td>Short-axis cine MRI</td>
+              <td>439 external test patients</td>
+              <td>Clinician LV volumes and ejection fraction</td>
             </tr>
             <tr>
               <td><b>Health profile</b></td>
@@ -863,9 +875,9 @@ function ResearchPage() {
           <tbody>
             <tr><td><b>ECG classifier</b></td><td>Macro AUROC, five findings</td><td>0.911 (normal 0.941, MI 0.921, ST/T 0.930, conduction 0.924, hypertrophy 0.837)</td></tr>
             <tr><td><b>ECG digitizer</b></td><td>Correlation with the original signal, flat scans</td><td>0.94</td></tr>
-            <tr><td><b>MRI segmenter</b></td><td>Dice overlap with expert outlines</td><td>LV 0.956, RV 0.933, myocardium 0.870 (end-diastole)</td></tr>
-            <tr><td><b>Ejection fraction</b></td><td>Agreement with expert values</td><td>r = 0.991</td></tr>
-            <tr><td><b>MRI diagnosis</b></td><td>Correct out of 50 test patients</td><td>45 (90%, 95% CI 79–96%)</td></tr>
+            <tr><td><b>MRI segmenter</b></td><td>Dice overlap with expert outlines</td><td>End-diastole, ACDC / M&amp;Ms / M&amp;Ms-2: LV 0.954 / 0.937 / 0.944, RV 0.928 / 0.892 / 0.908, myocardium 0.861 / 0.828 / 0.833</td></tr>
+            <tr><td><b>Ejection fraction</b></td><td>Mean absolute error</td><td>3.0 / 4.1 / 3.6 points against experts; 5.7 points against clinicians on 439 external Kaggle patients</td></tr>
+            <tr><td><b>MRI diagnosis</b></td><td>Correct out of 50 ACDC test patients</td><td>43 (86%, 95% CI 74–93%)</td></tr>
           </tbody>
         </table>
       </div>

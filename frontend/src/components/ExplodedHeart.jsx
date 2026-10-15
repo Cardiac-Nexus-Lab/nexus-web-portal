@@ -71,8 +71,8 @@ const STOPS = [
     body: 'It pushes blood to the whole body. The MRI model outlines it when the heart is fullest and emptiest, then calculates how much blood each beat ejects.',
     modalities: ['MRI'],
     metrics: [
-      { value: '0.956', label: 'overlap with expert outline (Dice), 50 unseen patients' },
-      { value: 'r 0.991', label: 'ejection fraction agreement with experts' },
+      { value: '0.94', label: 'overlap with expert outline (Dice), 346 unseen patients, three cohorts' },
+      { value: '5.7 pts', label: 'ejection fraction error against clinicians, 439 external patients' },
     ],
     status: 'Trained · tested',
     probe: [590, 480],
@@ -84,8 +84,8 @@ const STOPS = [
     body: 'Thin-walled and crescent-shaped, it is the hardest chamber to outline, as in every published benchmark. Its size and function feed the MRI diagnosis of five heart conditions.',
     modalities: ['MRI'],
     metrics: [
-      { value: '0.933', label: 'overlap with expert outline (Dice)' },
-      { value: '45 / 50', label: 'unseen patients diagnosed correctly from heart measurements' },
+      { value: '0.89–0.93', label: 'overlap with expert outline (Dice), across three cohorts' },
+      { value: '43 / 50', label: 'unseen patients diagnosed correctly from heart measurements' },
     ],
     status: 'Trained · tested',
     probe: [128, 508],

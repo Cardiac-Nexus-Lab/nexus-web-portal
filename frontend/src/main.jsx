@@ -170,7 +170,7 @@ function Landing({ enter, signIn }) {
             <div className="eyebrow">SYSTEM ARCHITECTURE & TECHNOLOGY</div>
             <h2>Three analyses, each one explained.</h2>
             <p style={{ marginTop: 12 }}>
-              ECG recordings go to a 1D ResNet-18 trained on PTB-XL; paper printouts are first turned back into signals by a CNN trace digitizer. Cardiac MRI is outlined by a 2.5D U-Net trained on ACDC, and the outlines give chamber volumes, ejection fraction and a five-way diagnosis. Health values are checked against clinical guidelines. The three results are then combined by written rules into one attention level.
+              ECG recordings go to a 1D ResNet-18 trained on PTB-XL; paper printouts are first turned back into signals by a CNN trace digitizer. Cardiac MRI is outlined by a 2.5D U-Net trained on ACDC, M&Ms and M&Ms-2, and the outlines give chamber volumes, ejection fraction and a five-way diagnosis. Health values are checked against clinical guidelines. The three results are then combined by written rules into one attention level.
             </p>
 
             <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -201,7 +201,7 @@ function Landing({ enter, signIn }) {
             <div className="eyebrow">RESEARCH & CLINICAL GOVERNANCE</div>
             <h2>Responsible research by design.</h2>
             <p>
-              The models are trained and tested on public datasets: PTB-XL for ECG (21,388 recordings, with 2,158 held out for testing) and ACDC for cardiac MRI (100 training and 50 test patients). Every figure on this site is a held-out test result. Clinical validation, governance and privacy controls would be required before any real-world clinical use.
+              The models are trained and tested on public datasets: PTB-XL for ECG (21,388 recordings, with 2,158 held out for testing) and ACDC, M&Ms and M&Ms-2 for cardiac MRI (390 training and 346 test patients from several scanner vendors, plus 439 external Kaggle patients for ejection fraction). Every figure on this site is a held-out test result. Clinical validation, governance and privacy controls would be required before any real-world clinical use.
             </p>
           </div>
         </section>
