@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  Activity, ArrowRight, BrainCircuit, CheckCircle2, ClipboardList, FileText, HeartPulse, History, Image, LineChart, Menu, Plus, Settings, ShieldCheck, Sparkles, Upload, UserRound, LogOut, X
+  Activity, ArrowRight, BrainCircuit, CheckCircle2, ClipboardList, Database, Download, FileText, HeartPulse, History, Image, Info, KeyRound, LineChart, Menu, PanelLeftClose, Plus, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Upload, UserRound, LogOut
 } from 'lucide-react';
 import { auth } from '../firebase';
-import { sendEmailVerification, updateProfile } from 'firebase/auth';
+import { sendEmailVerification, sendPasswordResetEmail, updateProfile } from 'firebase/auth';
 import { ResultsView, ReportView, HistoryView } from './AnalysisResults';
 
 function Badge({ children, tone = 'blue' }) {
@@ -30,10 +30,106 @@ function DemoNotice() {
 const steps = ['Reading the ECG (or digitizing a printout)', 'ECG classifier: five diagnostic findings', 'ECG explanation: Integrated Gradients', 'Segmenting the heart in the MRI', 'Measuring volumes and ejection fraction', 'MRI diagnosis from measurements', 'Checking clinical values against guidelines', 'Combining the results into a summary'];
 const defaultPatient = { age: 52, blood_pressure: 140, cholesterol: 220, chest_pain: 'Typical angina', max_heart_rate: 150, exercise_angina: 'Yes' };
 
+// Per-browser preferences. Storage can be unavailable (private windows), so
+// every read falls back and every write is allowed to fail.
+function readPref(key, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return value === null ? fallback : JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+function writePref(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* not saved; still works this session */ }
+}
+
+const SIDEBAR_WIDTH = 238;
+const DRAG_TO_TOGGLE = 60;  // px a drag must travel before release opens or closes the sidebar
+const NARROW_QUERY = '(max-width: 850px)';
+
+function useNarrowScreen() {
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches);
+  useEffect(() => {
+    const query = window.matchMedia(NARROW_QUERY);
+    const onChange = e => setNarrow(e.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+  return narrow;
+}
+
+// Dragging the sidebar's edge handle: the sidebar follows the pointer, and on
+// release it closes if dragged left far enough, opens if dragged right far
+// enough, and otherwise springs back. A press without movement toggles it.
+function useSidebarDrag(open, setOpen) {
+  const [offset, setOffset] = useState(null);
+  const drag = useRef(null);
+  const base = open ? 0 : -SIDEBAR_WIDTH;
+
+  const end = () => { drag.current = null; setOffset(null); };
+  return {
+    offset,
+    handlers: {
+      onPointerDown: e => {
+        drag.current = { x: e.clientX, moved: false };
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setOffset(base);
+      },
+      onPointerMove: e => {
+        if (!drag.current) return;
+        const dx = e.clientX - drag.current.x;
+        if (Math.abs(dx) > 4) drag.current.moved = true;
+        setOffset(Math.max(-SIDEBAR_WIDTH, Math.min(0, base + dx)));
+      },
+      onPointerUp: e => {
+        if (!drag.current) return;
+        const { x, moved } = drag.current;
+        const dx = e.clientX - x;
+        end();
+        if (!moved) setOpen(!open);
+        else if (open && dx < -DRAG_TO_TOGGLE) setOpen(false);
+        else if (!open && dx > DRAG_TO_TOGGLE) setOpen(true);
+      },
+      onPointerCancel: end,
+    },
+  };
+}
+
 export function Dashboard({ user, token, onLogout, onUserUpdate }) {
-  const [page, setPage] = useState('Dashboard');
+  const [page, setPage] = useState(() => readPref('cnx.startPage', 'Dashboard'));
   const [result, setResult] = useState(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+
+  const narrow = useNarrowScreen();
+  const [pinnedOpen, setPinnedOpen] = useState(() => readPref('cnx.sidebarOpen', true));
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // On wide screens the sidebar sits beside the page and remembers its state;
+  // on narrow ones it is a drawer over the page that starts closed.
+  const sidebarOpen = narrow ? drawerOpen : pinnedOpen;
+  const setSidebarOpen = value => {
+    if (narrow) setDrawerOpen(value);
+    else { setPinnedOpen(value); writePref('cnx.sidebarOpen', value); }
+  };
+  const { offset, handlers } = useSidebarDrag(sidebarOpen, setSidebarOpen);
+
+  useEffect(() => {
+    const onKey = e => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setSidebarOpen(!sidebarOpen);
+      } else if (e.key === 'Escape' && narrow && drawerOpen) {
+        setDrawerOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  const go = name => {
+    setPage(name);
+    if (narrow) setDrawerOpen(false);
+  };
 
   const navItems = [
     { name: 'Dashboard', icon: Activity },
@@ -48,16 +144,24 @@ export function Dashboard({ user, token, onLogout, onUserUpdate }) {
 
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
+      {narrow && drawerOpen && <div className="sidebar-backdrop" onClick={() => setDrawerOpen(false)} />}
+
       {/* Sidebar */}
-      <aside className="sidebar">
+      <aside
+        id="app-sidebar"
+        className={`sidebar ${offset !== null ? 'dragging' : ''}`}
+        style={offset !== null ? { transform: `translateX(${offset}px)` } : undefined}
+        aria-hidden={!sidebarOpen && offset === null}
+      >
         <Logo />
         <div className="workspace-label">RESEARCH WORKSPACE</div>
         {navItems.map(({ name, icon: Icon }) => (
           <button
             key={name}
             className={`nav-item ${page === name ? 'active' : ''}`}
-            onClick={() => setPage(name)}
+            onClick={() => go(name)}
+            tabIndex={sidebarOpen ? 0 : -1}
           >
             <Icon size={18} />
             <span>{name}</span>
@@ -67,14 +171,33 @@ export function Dashboard({ user, token, onLogout, onUserUpdate }) {
           <Badge tone="blue">ACTIVE WORKSPACE</Badge>
           <p>Multimodal AI System</p>
         </div>
+        <div
+          className="sidebar-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={sidebarOpen ? 'Drag left to hide the sidebar' : 'Drag right to show the sidebar'}
+          title={sidebarOpen ? 'Drag left or click to hide' : 'Drag right or click to show'}
+          {...handlers}
+        >
+          <span />
+        </div>
       </aside>
 
       {/* Main Workspace */}
       <section className="workspace-main">
         {/* Header */}
         <header className="app-header">
-          <button className="mobile-menu"><Menu size={20} /></button>
-          <div>
+          <button
+            className="menu-toggle"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-controls="app-sidebar"
+            aria-expanded={sidebarOpen}
+            aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+            title={`${sidebarOpen ? 'Hide' : 'Show'} sidebar (Ctrl+B)`}
+          >
+            {sidebarOpen ? <PanelLeftClose size={20} /> : <Menu size={20} />}
+          </button>
+          <div className="app-header-title">
             <b>{page}</b>
             <small>Cardiac Nexus research workspace</small>
           </div>
@@ -121,7 +244,10 @@ export function Dashboard({ user, token, onLogout, onUserUpdate }) {
           {page === 'Patients' && <PatientsPage />}
           {page === 'Technology' && <TechnologyPage />}
           {page === 'Research' && <ResearchPage />}
-          {page === 'Settings' && <SettingsPage user={user} token={token} onLogout={onLogout} onUserUpdate={onUserUpdate} />}
+          {page === 'Settings' && (
+            <SettingsPage user={user} token={token} onLogout={onLogout} onUserUpdate={onUserUpdate} setPage={go}
+              sidebarPinned={pinnedOpen} setSidebarPinned={value => { setPinnedOpen(value); writePref('cnx.sidebarOpen', value); }} />
+          )}
         </div>
 
       </section>
@@ -450,290 +576,351 @@ function PatientsPage() {
 // ----------------------------------------------------
 // PAGE 7: SETTINGS PAGE
 // ----------------------------------------------------
-function SettingsPage({ user, token, onLogout, onUserUpdate }) {
-  const firebaseUser = auth.currentUser;
-  const providerId = firebaseUser?.providerData?.[0]?.providerId || user?.provider || user?.auth_provider || '';
-  const isGoogle = providerId === 'google.com' || providerId === 'Google Sign-In' || user?.auth_provider === 'google' || user?.auth_provider === 'Google Sign-In';
+const SETTINGS_SECTIONS = [
+  { id: 'profile', label: 'Profile', hint: 'Name, role, institution', Icon: UserRound },
+  { id: 'account', label: 'Account & security', hint: 'Email, sign-in, password', Icon: KeyRound },
+  { id: 'preferences', label: 'Preferences', hint: 'Layout and start page', Icon: SlidersHorizontal },
+  { id: 'data', label: 'Data & privacy', hint: 'What is saved, export', Icon: Database },
+  { id: 'about', label: 'About', hint: 'Models and versions', Icon: Info },
+];
 
-  const [showModal, setShowModal] = useState(false);
-  const [editName, setEditName] = useState(user?.name || user?.displayName || '');
-  const [editRole, setEditRole] = useState(user?.role || 'Not Set');
-  const [editInstitution, setEditInstitution] = useState(user?.institution || 'Not Set');
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [saveSuccess, setSaveSuccess] = useState('');
-  const [emailSending, setEmailSending] = useState(false);
-  const [verificationSuccess, setVerificationSuccess] = useState('');
-  const [verificationError, setVerificationError] = useState('');
-  const [isEmailVerified, setIsEmailVerified] = useState(false);
+const ROLES = ['Researcher', 'Cardiologist', 'Radiologist', 'Student', 'Administrator', 'Other'];
+const START_PAGES = ['Dashboard', 'New Analysis', 'History'];
 
+const unset = value => !value || value === 'Not Set' || value === 'Complete Profile' || !String(value).trim();
+
+function SettingsRow({ label, description, children }) {
+  return (
+    <div className="settings-row">
+      <div className="settings-row-text">
+        <b>{label}</b>
+        {description && <p>{description}</p>}
+      </div>
+      <div className="settings-row-control">{children}</div>
+    </div>
+  );
+}
+
+function Switch({ checked, onChange, label }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} aria-label={label}
+      className={`switch ${checked ? 'on' : ''}`} onClick={() => onChange(!checked)}>
+      <span />
+    </button>
+  );
+}
+
+function Notice({ tone, children }) {
+  return children ? <div className={`settings-notice ${tone}`} role="status">{children}</div> : null;
+}
+
+function SettingsPage({ user, token, onLogout, onUserUpdate, setPage, sidebarPinned, setSidebarPinned }) {
+  const [section, setSection] = useState(() => readPref('cnx.settingsSection', 'profile'));
+  const choose = id => { setSection(id); writePref('cnx.settingsSection', id); };
+  const current = SETTINGS_SECTIONS.find(s => s.id === section) || SETTINGS_SECTIONS[0];
+  const nav = useRef(null);
+  // On phones the sections are a scrolling row of tabs; keep the chosen one in view.
   useEffect(() => {
-    let isMounted = true;
-    const refreshUserVerification = async () => {
-      if (auth.currentUser) {
-        try {
-          await auth.currentUser.reload();
-        } catch (e) {
-          console.warn('Could not reload Firebase user state:', e);
-        }
-        if (isMounted && auth.currentUser) {
-          setIsEmailVerified(auth.currentUser.emailVerified);
-        }
-      } else if (user) {
-        setIsEmailVerified(Boolean(user.emailVerified));
-      }
-    };
-    refreshUserVerification();
-    return () => { isMounted = false; };
-  }, [user]);
-
-  const handleSendVerificationEmail = async () => {
-    setVerificationSuccess('');
-    setVerificationError('');
-    setEmailSending(true);
-
-    try {
-      if (!auth.currentUser) {
-        throw new Error('No active user session found. Please sign in again.');
-      }
-      await sendEmailVerification(auth.currentUser);
-      setVerificationSuccess('Verification email sent successfully! Please check your inbox.');
-    } catch (err) {
-      console.error('Send verification email error:', err);
-      setVerificationError(err.message || 'Failed to send verification email.');
-    } finally {
-      setEmailSending(false);
-    }
-  };
-
-  const formatProfileField = (val) => {
-    if (!val || val === 'Not Set' || val.trim() === '') {
-      return 'Complete Profile';
-    }
-    return val;
-  };
-
-  const roles = [
-    'Researcher',
-    'Cardiologist',
-    'Radiologist',
-    'Student',
-    'Administrator',
-    'Other'
-  ];
-
-  const openEditModal = () => {
-    setEditName(user?.name || user?.displayName || '');
-    setEditRole(user?.role && user?.role !== 'Not Set' ? user.role : 'Researcher');
-    setEditInstitution(user?.institution && user?.institution !== 'Not Set' ? user.institution : '');
-    setSaveError('');
-    setSaveSuccess('');
-    setShowModal(true);
-  };
-
-  const handleSaveProfile = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    setSaveError('');
-    setSaveSuccess('');
-
-    try {
-      const resp = await fetch('/api/auth/profile', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify({
-          name: editName,
-          role: editRole,
-          institution: editInstitution
-        })
-      });
-
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Failed to update profile');
-      }
-
-      const updatedUser = await resp.json();
-
-      if (auth.currentUser && editName) {
-        try {
-          await updateProfile(auth.currentUser, { displayName: editName });
-        } catch (e) {
-          console.warn('Could not update Firebase displayName:', e);
-        }
-      }
-
-      if (onUserUpdate) {
-        onUserUpdate(updatedUser);
-      }
-      setSaveSuccess('Profile updated successfully!');
-      setTimeout(() => {
-        setShowModal(false);
-        setSaveSuccess('');
-      }, 1000);
-    } catch (err) {
-      setSaveError(err.message || 'Failed to save profile changes.');
-    } finally {
-      setSaving(false);
-    }
-  };
+    nav.current?.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [current.id]);
 
   return (
     <>
-      <DemoNotice />
       <div className="page-title">
         <div>
           <div className="eyebrow">WORKSPACE SETTINGS</div>
           <h1>Settings</h1>
-          <p>Manage researcher credentials, preferences, and session controls.</p>
+          <p>Manage your profile, account security, preferences and data.</p>
         </div>
       </div>
 
-      <div className="upload-card" style={{ maxWidth: 580 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
-          <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#176b87', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 26, fontWeight: 700, flexShrink: 0 }}>
-            {(user?.name || user?.displayName || 'U')[0].toUpperCase()}
-          </div>
-          <div>
-            <h3 style={{ margin: 0, fontSize: 18 }}>{user?.name || user?.displayName || 'User'}</h3>
-            <p style={{ fontSize: 13, color: '#708691', margin: '2px 0 0' }}>{user?.email || 'N/A'}</p>
-          </div>
-        </div>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings sections" ref={nav}>
+          {SETTINGS_SECTIONS.map(({ id, label, hint, Icon }) => (
+            <button key={id} className={current.id === id ? 'active' : ''} onClick={() => choose(id)}
+              aria-current={current.id === id ? 'page' : undefined}>
+              <Icon size={18} />
+              <span><b>{label}</b><small>{hint}</small></span>
+            </button>
+          ))}
+        </nav>
 
-        <div style={{ background: 'rgba(0,0,0,0.03)', padding: 16, borderRadius: 8, marginBottom: 20, fontSize: 13 }}>
-          <div style={{ marginBottom: 10 }}>
-            <span style={{ color: '#708691' }}>Full Name: </span>
-            <b>{user?.name || user?.displayName || 'User'}</b>
-          </div>
-          <div style={{ marginBottom: 10 }}>
-            <span style={{ color: '#708691' }}>Email Address: </span>
-            <b>{user?.email || 'N/A'}</b>
-          </div>
-          <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ color: '#708691' }}>Email Verification: </span>
-            {isGoogle ? (
-              <span style={{ color: '#2e7d32', fontWeight: 600 }}>Google Account (Verified by Google) ✅</span>
-            ) : isEmailVerified ? (
-              <span style={{ color: '#2e7d32', fontWeight: 600 }}>Verified ✅</span>
-            ) : (
-              <>
-                <span style={{ color: '#ed6c02', fontWeight: 600 }}>Not Verified ⚠️</span>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={handleSendVerificationEmail}
-                  disabled={emailSending}
-                  style={{ fontSize: 11, padding: '3px 10px', marginLeft: 4, cursor: 'pointer' }}
-                >
-                  {emailSending ? 'Sending...' : 'Send Verification Email'}
-                </button>
-              </>
-            )}
-          </div>
-          {verificationSuccess && (
-            <div style={{ color: '#2e7d32', fontSize: 12, marginBottom: 10, fontWeight: 500 }}>
-              {verificationSuccess}
-            </div>
-          )}
-          {verificationError && (
-            <div style={{ color: '#c62828', fontSize: 12, marginBottom: 10, fontWeight: 500 }}>
-              {verificationError}
-            </div>
-          )}
-          <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: '#708691' }}>Authentication Provider: </span>
-            <Badge tone={isGoogle ? 'blue' : 'green'}>
-              {isGoogle ? 'Google Sign-In' : 'Email/Password'}
-            </Badge>
-          </div>
-          <div style={{ marginBottom: 10 }}>
-            <span style={{ color: '#708691' }}>Role: </span>
-            <b style={{ color: !user?.role || user?.role === 'Not Set' || user?.role === 'Complete Profile' ? '#c62828' : 'inherit' }}>
-              {formatProfileField(user?.role)}
-            </b>
-          </div>
-          <div>
-            <span style={{ color: '#708691' }}>Institute: </span>
-            <b style={{ color: !user?.institution || user?.institution === 'Not Set' || user?.institution === 'Complete Profile' ? '#c62828' : 'inherit' }}>
-              {formatProfileField(user?.institution)}
-            </b>
-          </div>
-        </div>
+        <section className="settings-panel">
+          {current.id === 'profile' && <ProfileSettings user={user} token={token} onUserUpdate={onUserUpdate} />}
+          {current.id === 'account' && <AccountSettings user={user} onLogout={onLogout} />}
+          {current.id === 'preferences' && <PreferenceSettings sidebarPinned={sidebarPinned} setSidebarPinned={setSidebarPinned} />}
+          {current.id === 'data' && <DataSettings token={token} setPage={setPage} />}
+          {current.id === 'about' && <AboutSettings setPage={setPage} />}
+        </section>
+      </div>
+    </>
+  );
+}
 
-        <div style={{ display: 'flex', gap: 12 }}>
-          <button className="primary" onClick={openEditModal}>
-            Edit Profile
-          </button>
-          <button className="secondary" onClick={onLogout}>
-            <LogOut size={16} /> Sign Out
-          </button>
+function PanelHeader({ title, children }) {
+  return (
+    <header className="settings-panel-header">
+      <h2>{title}</h2>
+      <p>{children}</p>
+    </header>
+  );
+}
+
+function ProfileSettings({ user, token, onUserUpdate }) {
+  const initial = () => ({
+    name: user?.name || user?.displayName || '',
+    role: unset(user?.role) ? '' : user.role,
+    institution: unset(user?.institution) ? '' : user.institution,
+  });
+  const [form, setForm] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState({ tone: '', text: '' });
+  useEffect(() => { setForm(initial()); }, [user]);
+
+  const saved = initial();
+  const changed = form.name !== saved.name || form.role !== saved.role || form.institution !== saved.institution;
+  const incomplete = !saved.role || !saved.institution;
+  const set = (key, value) => { setForm({ ...form, [key]: value }); setMessage({ tone: '', text: '' }); };
+
+  async function save(e) {
+    e.preventDefault();
+    setSaving(true);
+    setMessage({ tone: '', text: '' });
+    try {
+      const resp = await fetch('/api/auth/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ name: form.name.trim(), role: form.role, institution: form.institution.trim() }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.detail || 'Could not save the profile.');
+      }
+      const updated = await resp.json();
+      if (auth.currentUser && form.name.trim()) {
+        try { await updateProfile(auth.currentUser, { displayName: form.name.trim() }); } catch (e) { console.warn('Could not update Firebase displayName:', e); }
+      }
+      onUserUpdate?.(updated);
+      setMessage({ tone: 'success', text: 'Profile saved.' });
+    } catch (err) {
+      setMessage({ tone: 'error', text: err.message || 'Could not save the profile.' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const name = user?.name || user?.displayName || 'User';
+  return (
+    <form onSubmit={save}>
+      <PanelHeader title="Profile">How you appear in the workspace and on generated reports.</PanelHeader>
+
+      <div className="settings-identity">
+        <div className="settings-avatar">{name[0].toUpperCase()}</div>
+        <div>
+          <b>{name}</b>
+          <p>{user?.email || ''}</p>
         </div>
+        {incomplete && <Badge tone="amber">PROFILE INCOMPLETE</Badge>}
       </div>
 
-      {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 460, padding: 24 }}>
-            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h3 style={{ margin: 0, fontSize: 18 }}>Edit Profile Details</h3>
-              <button className="close-btn" style={{ background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => setShowModal(false)}><X size={18} /></button>
-            </div>
-            {saveSuccess ? (
-              <p style={{ color: '#2e7d32', fontSize: 14, margin: '14px 0', fontWeight: 600 }}>{saveSuccess}</p>
-            ) : (
-              <form onSubmit={handleSaveProfile}>
-                {saveError && <div className="error" style={{ marginBottom: 12 }}>{saveError}</div>}
-                
-                <div className="auth-form-field" style={{ marginBottom: 16 }}>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Full Name</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Dr. Sarah Jenkins"
-                    value={editName}
-                    onChange={e => setEditName(e.target.value)}
-                    required
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: 6, border: '1px solid rgba(0,0,0,0.18)', fontSize: 14 }}
-                  />
-                </div>
+      <div className="settings-fields">
+        <label>Full name
+          <input type="text" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="e.g. Dr. Sarah Jenkins" />
+        </label>
+        <label>Role
+          <select value={form.role} onChange={e => set('role', e.target.value)}>
+            <option value="">Not set</option>
+            {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </label>
+        <label className="wide">Institution
+          <input type="text" value={form.institution} onChange={e => set('institution', e.target.value)} placeholder="e.g. SJC Institute of Technology" />
+        </label>
+      </div>
 
-                <div className="auth-form-field" style={{ marginBottom: 16 }}>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Role</label>
-                  <select
-                    value={editRole}
-                    onChange={e => setEditRole(e.target.value)}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: 6, border: '1px solid rgba(0,0,0,0.18)', background: '#fff', fontSize: 14 }}
-                  >
-                    <option value="Not Set">Not Set</option>
-                    {roles.map(r => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                </div>
+      <Notice tone={message.tone}>{message.text}</Notice>
+      <div className="settings-actions">
+        <button type="button" className="secondary" disabled={!changed || saving} onClick={() => setForm(initial())}>Discard</button>
+        <button type="submit" className="primary" disabled={!changed || saving || !form.name.trim()}>{saving ? 'Saving…' : 'Save changes'}</button>
+      </div>
+    </form>
+  );
+}
 
-                <div className="auth-form-field" style={{ marginBottom: 24 }}>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Institute / Institution</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Nexus Heart Institute"
-                    value={editInstitution}
-                    onChange={e => setEditInstitution(e.target.value)}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: 6, border: '1px solid rgba(0,0,0,0.18)', fontSize: 14 }}
-                  />
-                </div>
+function AccountSettings({ user, onLogout }) {
+  const providerId = auth.currentUser?.providerData?.[0]?.providerId || user?.provider || user?.auth_provider || '';
+  const isGoogle = ['google.com', 'google', 'Google Sign-In'].includes(providerId) || ['google', 'Google Sign-In'].includes(user?.auth_provider);
+  const email = user?.email || auth.currentUser?.email || '';
+  const [verified, setVerified] = useState(Boolean(user?.emailVerified));
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState({ tone: '', text: '' });
 
-                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                  <button type="button" className="secondary" onClick={() => setShowModal(false)}>
-                    Cancel
-                  </button>
-                  <button type="submit" className="primary" disabled={saving}>
-                    {saving ? 'Saving...' : 'Save Profile'}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (!auth.currentUser) return;
+      try { await auth.currentUser.reload(); } catch (e) { console.warn('Could not reload Firebase user state:', e); }
+      if (live && auth.currentUser) setVerified(auth.currentUser.emailVerified);
+    })();
+    return () => { live = false; };
+  }, [user]);
+
+  async function run(kind, action, success) {
+    setBusy(kind);
+    setMessage({ tone: '', text: '' });
+    try {
+      await action();
+      setMessage({ tone: 'success', text: success });
+    } catch (err) {
+      setMessage({ tone: 'error', text: err.message || 'Something went wrong. Please try again.' });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const sendVerification = () => run('verify', async () => {
+    if (!auth.currentUser) throw new Error('No active session. Please sign in again.');
+    await sendEmailVerification(auth.currentUser);
+  }, `Verification email sent to ${email}.`);
+
+  const sendReset = () => run('reset', () => sendPasswordResetEmail(auth, email),
+    `Password reset email sent to ${email}.`);
+
+  const memberSince = user?.created_at ? new Date(user.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : null;
+
+  return (
+    <>
+      <PanelHeader title="Account & security">Your sign-in details. Email and password are managed by Firebase Authentication.</PanelHeader>
+      <Notice tone={message.tone}>{message.text}</Notice>
+
+      <SettingsRow label="Email address" description="Used to sign in and to link your saved analyses.">
+        <span className="settings-value">{email || '—'}</span>
+      </SettingsRow>
+
+      <SettingsRow label="Email verification" description={isGoogle ? 'Verified by Google when you signed in.' : 'Confirms that this address belongs to you.'}>
+        {isGoogle || verified ? (
+          <Badge tone="green">VERIFIED</Badge>
+        ) : (
+          <>
+            <Badge tone="amber">NOT VERIFIED</Badge>
+            <button type="button" className="secondary small" onClick={sendVerification} disabled={busy === 'verify'}>
+              {busy === 'verify' ? 'Sending…' : 'Send email'}
+            </button>
+          </>
+        )}
+      </SettingsRow>
+
+      <SettingsRow label="Sign-in method">
+        <Badge tone={isGoogle ? 'blue' : 'green'}>{isGoogle ? 'GOOGLE SIGN-IN' : 'EMAIL AND PASSWORD'}</Badge>
+      </SettingsRow>
+
+      <SettingsRow label="Password" description={isGoogle ? 'Your password is managed in your Google account.' : 'We email you a secure link to choose a new password.'}>
+        {isGoogle ? (
+          <a className="secondary small" href="https://myaccount.google.com/security" target="_blank" rel="noreferrer">Google security</a>
+        ) : (
+          <button type="button" className="secondary small" onClick={sendReset} disabled={busy === 'reset' || !email}>
+            {busy === 'reset' ? 'Sending…' : 'Reset password'}
+          </button>
+        )}
+      </SettingsRow>
+
+      {memberSince && (
+        <SettingsRow label="Member since"><span className="settings-value">{memberSince}</span></SettingsRow>
       )}
+
+      <SettingsRow label="Sign out" description="Ends your session in this browser.">
+        <button type="button" className="secondary small danger" onClick={onLogout}><LogOut size={15} /> Sign out</button>
+      </SettingsRow>
+    </>
+  );
+}
+
+function PreferenceSettings({ sidebarPinned, setSidebarPinned }) {
+  const [startPage, setStartPage] = useState(() => readPref('cnx.startPage', 'Dashboard'));
+  return (
+    <>
+      <PanelHeader title="Preferences">Saved in this browser only.</PanelHeader>
+
+      <SettingsRow label="Keep the sidebar open"
+        description="Hide it with the menu button, by dragging its edge to the left, or with Ctrl+B (⌘B on Mac). On phones it always opens as a drawer.">
+        <Switch checked={sidebarPinned} onChange={setSidebarPinned} label="Keep the sidebar open" />
+      </SettingsRow>
+
+      <SettingsRow label="Start page" description="The page that opens after you sign in.">
+        <select value={startPage} onChange={e => { setStartPage(e.target.value); writePref('cnx.startPage', e.target.value); }}>
+          {START_PAGES.map(p => <option key={p}>{p}</option>)}
+        </select>
+      </SettingsRow>
+    </>
+  );
+}
+
+function DataSettings({ token, setPage }) {
+  const [analyses, setAnalyses] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    fetch('/api/analyses', { headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: 'same-origin' })
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error('Could not load your saved analyses.'))))
+      .then(rows => { if (live) setAnalyses(rows); })
+      .catch(err => { if (live) setError(err.message); });
+    return () => { live = false; };
+  }, [token]);
+
+  function exportList() {
+    const blob = new Blob([JSON.stringify(analyses, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `cardiac-nexus-analyses-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  return (
+    <>
+      <PanelHeader title="Data & privacy">What Cardiac Nexus keeps about your work.</PanelHeader>
+      <Notice tone="error">{error}</Notice>
+
+      <SettingsRow label="Saved analyses" description="Results of each analysis you run are saved to your account and listed in History.">
+        <span className="settings-value">{analyses ? analyses.length : error ? '—' : 'Loading…'}</span>
+        <button type="button" className="secondary small" onClick={() => setPage('History')}>Open History</button>
+      </SettingsRow>
+
+      <SettingsRow label="Export" description="Download the list of your saved analyses as a JSON file.">
+        <button type="button" className="secondary small" onClick={exportList} disabled={!analyses?.length}>
+          <Download size={15} /> Export
+        </button>
+      </SettingsRow>
+
+      <SettingsRow label="Uploaded files" description="ECG and MRI files are read in memory for the analysis and are not kept. Only the file names and the results are saved.">
+        <Badge tone="green">NOT STORED</Badge>
+      </SettingsRow>
+
+      <SettingsRow label="Research use" description="Cardiac Nexus is a research prototype. Use de-identified data, and do not use its results for clinical decisions.">
+        <ShieldCheck size={20} className="settings-icon" />
+      </SettingsRow>
+    </>
+  );
+}
+
+function AboutSettings({ setPage }) {
+  const models = [
+    ['ECG classifier', 'xresnet1d18, trained on PTB-XL'],
+    ['ECG digitizer', 'CNN trace localizer for 12x1 printouts'],
+    ['MRI segmenter', '2.5D U-Net, trained on ACDC, M&Ms and M&Ms-2'],
+    ['MRI diagnosis', 'Logistic regression on heart measurements'],
+    ['Health checks', 'ACC/AHA 2017 and NCEP ATP III rules'],
+  ];
+  return (
+    <>
+      <PanelHeader title="About">Cardiac Nexus: explainable multimodal cardiovascular AI.</PanelHeader>
+      {models.map(([label, value]) => (
+        <SettingsRow key={label} label={label}><span className="settings-value">{value}</span></SettingsRow>
+      ))}
+      <SettingsRow label="Project" description="BE major project, Department of CSE, SJC Institute of Technology.">
+        <button type="button" className="secondary small" onClick={() => setPage('Research')}>Test results</button>
+      </SettingsRow>
     </>
   );
 }
