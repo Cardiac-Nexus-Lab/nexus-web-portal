@@ -147,6 +147,7 @@ def _png(fig) -> str:
 # ----------------------------------------------------------------------------
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
+TABLE_SUFFIXES = (".csv", ".txt")
 
 # Checks that an upload is an ECG at all. The classifier has no "not an ECG" answer, so without
 # them a logo or random numbers get a confident diagnosis. Thresholds were set by scoring the
@@ -203,29 +204,81 @@ def _lead_key(name: str) -> str:
     return str(name).strip().upper().replace("LEAD", "").replace("_", "").replace(" ", "")
 
 
+# Column names that hold time or a sample counter rather than a lead.
+TIME_KEYS = {"TIME", "T", "MS", "SECONDS", "SEC", "TIMEMS", "TIMES", "TIME(MS)", "TIME(S)"}
+INDEX_KEYS = {"SAMPLE", "INDEX", "N"}
+ECG_SECONDS = 10.0
+MIN_SECONDS = 9.5          # shorter recordings are refused: stretching them would change heart rate
+MAX_MISSING_SHARE = 0.2    # a lead with more gaps than this is refused rather than filled in
+
+
+def _is_number(value) -> bool:
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _looks_headerless(columns) -> bool:
+    """True when pandas took the first row of numbers as column names.
+
+    pandas renames repeated names ('0.1', '0.1.1'), so a trailing '.N' is ignored.
+    """
+    names = [str(c) for c in columns]
+    numeric = sum(_is_number(n) or _is_number(n.rsplit(".", 1)[0]) for n in names)
+    return numeric >= 0.8 * len(names)
+
+
+def _sampling_rate(times: pd.Series, column: str) -> float | None:
+    """Sampling rate from a time column, in seconds or milliseconds."""
+    t = pd.to_numeric(times, errors="coerce").to_numpy(dtype=float)
+    steps = np.diff(t[np.isfinite(t)])
+    step = float(np.median(steps)) if len(steps) else 0.0
+    if step <= 0:
+        return None
+    in_ms = "MS" in _lead_key(column) or step >= 0.5   # 0.5 s between samples is not an ECG
+    return (1000.0 if in_ms else 1.0) / step
+
+
+def _resample(signal: np.ndarray, length: int) -> np.ndarray:
+    """Anti-aliased resampling of every lead to `length` samples."""
+    from fractions import Fraction
+    from scipy.signal import resample_poly
+
+    if signal.shape[1] == length:
+        return signal
+    ratio = Fraction(length, signal.shape[1]).limit_denominator(1000)
+    out = resample_poly(signal, ratio.numerator, ratio.denominator, axis=1, padtype="line")
+    if out.shape[1] >= length:
+        return out[:, :length]
+    return np.pad(out, ((0, 0), (0, length - out.shape[1])), mode="edge")
+
+
 def read_ecg_table(data: bytes) -> tuple[np.ndarray, list[str]]:
     """Parse a CSV or TXT recording into [12, samples]."""
     notes = []
-    text = data.decode("utf-8", errors="replace")
+    text = data.decode("utf-8-sig", errors="replace")  # -sig drops the byte-order mark Excel writes
     try:
         frame = pd.read_csv(io.StringIO(text), sep=None, engine="python")
     except Exception as error:
         raise InputError(f"Could not read the ECG file as a table: {error}") from error
 
-    def is_number(value) -> bool:
-        try:
-            float(value)
-            return True
-        except (TypeError, ValueError):
-            return False
-
     # A file with no header row has numbers where the column names would be.
-    if all(is_number(c) for c in frame.columns):
+    headerless = _looks_headerless(frame.columns)
+    if headerless:
         frame = pd.read_csv(io.StringIO(text), sep=None, engine="python", header=None)
+        # Leads stored as rows with the lead name first: "I,0.12,0.15,...".
+        first = frame.iloc[:, 0]
+        if frame.shape[0] < frame.shape[1] and not any(_is_number(v) for v in first):
+            frame = frame.set_index(0).T.reset_index(drop=True)
+            notes.append("Leads were stored as rows; read them as rows.")
 
-    frame = frame.drop(columns=[c for c in frame.columns
-                                if _lead_key(c) in {"TIME", "T", "SAMPLE", "INDEX", "MS", "SECONDS"}])
-    frame = frame.apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all").dropna(axis=0, how="any")
+    time_column = next((c for c in frame.columns if _lead_key(c) in TIME_KEYS), None)
+    fs = _sampling_rate(frame[time_column], str(time_column)) if time_column is not None else None
+    frame = frame.drop(columns=[c for c in frame.columns if _lead_key(c) in TIME_KEYS | INDEX_KEYS])
+    frame = frame.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    frame = frame.dropna(axis=1, how="all").dropna(axis=0, how="all")
 
     # Twelve rows of many values means leads are stored as rows.
     if frame.shape[0] == 12 and frame.shape[1] > 12:
@@ -241,25 +294,47 @@ def read_ecg_table(data: bytes) -> tuple[np.ndarray, list[str]]:
         notes.append("Lead names were not found, so columns were assumed to be in the standard order "
                      "I, II, III, aVR, aVL, aVF, V1-V6.")
     else:
-        raise InputError(f"The ECG file needs 12 lead columns; found {frame.shape[1]} numeric columns.")
+        raise InputError(f"The ECG file needs 12 lead columns; found {frame.shape[1]} numeric columns. "
+                         f"Use a comma, semicolon or tab between values and a full stop as the decimal mark.")
 
-    signal = frame.to_numpy(dtype=np.float32).T
+    # Gaps are filled along each lead rather than cutting the row out of every lead,
+    # which would splice the recording together and shift the leads in time.
+    missing = frame.isna().mean()
+    if (missing > MAX_MISSING_SHARE).any():
+        bad = ", ".join(LEAD_NAMES[i] for i, m in enumerate(missing) if m > MAX_MISSING_SHARE)
+        raise InputError(f"Lead(s) {bad} are more than {MAX_MISSING_SHARE:.0%} empty or unreadable.")
+    if missing.any():
+        count = int(frame.isna().sum().sum())
+        frame = frame.interpolate(limit_direction="both")
+        notes.append(f"{count} missing or unreadable value(s) were filled in from their neighbours.")
+
+    signal = frame.to_numpy(dtype=np.float64).T
     if signal.shape[1] < 100:
         raise InputError(f"The ECG recording is too short ({signal.shape[1]} samples); at least 100 are needed.")
-    if signal.shape[1] != ECG_SAMPLES:
-        notes.append(f"Resampled from {signal.shape[1]} to {ECG_SAMPLES} samples, assuming the recording "
-                     f"spans 10 seconds as the model was trained on.")
-        source = np.linspace(0, 1, signal.shape[1])
-        target = np.linspace(0, 1, ECG_SAMPLES)
-        signal = np.stack([np.interp(target, source, lead) for lead in signal]).astype(np.float32)
+    if fs is not None:
+        seconds = signal.shape[1] / fs
+        if seconds < MIN_SECONDS:
+            raise InputError(f"The recording is {seconds:.1f} s long ({signal.shape[1]} samples at {fs:g} Hz, "
+                             f"from its time column). The model reads 10 s; a shorter recording would have to be "
+                             f"stretched, which changes the heart rate it sees.")
+        if seconds > ECG_SECONDS + 0.5 / fs:
+            signal = signal[:, : int(round(ECG_SECONDS * fs))]
+            notes.append(f"The recording is {seconds:.0f} s long; its first 10 s were analysed.")
+        if abs(fs - ECG_SAMPLES / ECG_SECONDS) > 0.5:
+            notes.append(f"Resampled from {fs:g} Hz (read from the time column) to the model's 100 Hz.")
+    elif signal.shape[1] != ECG_SAMPLES:
+        notes.append(f"The file has no time column, so its {signal.shape[1]} samples were assumed to span "
+                     f"10 s ({signal.shape[1] / ECG_SECONDS:g} Hz) and resampled to 100 Hz. If the recording is "
+                     f"not 10 s long, add a time column, or heart rate and intervals will be read wrongly.")
+    signal = _resample(signal, ECG_SAMPLES)
 
     flat = [LEAD_NAMES[i] for i, lead in enumerate(signal) if lead.std() < 1e-6]
     if flat:
         notes.append(f"Flat lead(s) {', '.join(flat)}: possibly disconnected; results may be less reliable.")
+    signal = signal.astype(np.float32)
     # Per-lead standardization, exactly as in training.
     signal = (signal - signal.mean(axis=1, keepdims=True)) / (signal.std(axis=1, keepdims=True) + 1e-6)
     return signal.astype(np.float32), notes
-
 
 def _ecg_figure(signal: np.ndarray, values: np.ndarray, title: str) -> str:
     """Twelve leads, with red shading where the evidence supports the finding."""
@@ -285,7 +360,14 @@ def _ecg_figure(signal: np.ndarray, values: np.ndarray, title: str) -> str:
 def analyze_ecg(filename: str, data: bytes) -> dict:
     m = models()
     notes: list[str] = []
-    if filename.lower().endswith(IMAGE_SUFFIXES):
+    lower = filename.lower()
+    if lower.endswith(".pdf"):
+        raise InputError("PDF ECGs are not supported yet. Upload the ECG as a CSV or TXT of the 12 leads, "
+                         "or as a PNG or JPG scan of a 12x1 printout.")
+    if not lower.endswith(IMAGE_SUFFIXES + TABLE_SUFFIXES):
+        raise InputError(f"{filename} is not a supported ECG file. Upload a CSV or TXT of the 12 leads, "
+                         f"or a PNG or JPG scan of a 12x1 printout.")
+    if lower.endswith(IMAGE_SUFFIXES):
         image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise InputError("The ECG image could not be opened.")
@@ -418,14 +500,19 @@ def _normalize(volume: np.ndarray) -> np.ndarray:
     return ((clipped - clipped.mean()) / (clipped.std() + 1e-6)).astype(np.float32)
 
 
+SEGMENT_BATCH = 16
+
+
 @torch.no_grad()
 def _segment(volume: np.ndarray) -> np.ndarray:
     """Each slice with its neighbours as channels (2.5D), as in training."""
     image = _normalize(volume)
     n = len(image)
     stacks = np.stack([np.stack([image[max(i - 1, 0)], image[i], image[min(i + 1, n - 1)]]) for i in range(n)])
-    logits = models()["segmenter"](torch.from_numpy(stacks).to(DEVICE))
-    return logits.argmax(dim=1).numpy().astype(np.uint8)
+    # A few slices at a time, so a large volume cannot exhaust memory on the server.
+    masks = [models()["segmenter"](torch.from_numpy(stacks[i:i + SEGMENT_BATCH]).to(DEVICE)).argmax(dim=1)
+             for i in range(0, n, SEGMENT_BATCH)]
+    return torch.cat(masks).numpy().astype(np.uint8)
 
 
 def _mri_figure(panels: list[tuple[str, np.ndarray, np.ndarray]]) -> str:
@@ -478,8 +565,28 @@ def _ef_category(ef: float) -> str:
     return "reduced"
 
 
+# An ejection fraction below this means the two frames are the same phase or the same file,
+# not a living heart.
+MIN_PLAUSIBLE_EF = 3.0
+HEIGHT_RANGE_CM = (100.0, 250.0)
+WEIGHT_RANGE_KG = (25.0, 300.0)
+
+
+def check_body_size(height_cm: float | None, weight_kg: float | None) -> None:
+    """Refuse heights and weights in the wrong units; they would change the diagnosis silently."""
+    if height_cm is not None and not HEIGHT_RANGE_CM[0] <= height_cm <= HEIGHT_RANGE_CM[1]:
+        raise InputError(f"Height {height_cm:g} is outside {HEIGHT_RANGE_CM[0]:g}-{HEIGHT_RANGE_CM[1]:g} cm. "
+                         f"Enter height in centimetres, for example 172 rather than 1.72.")
+    if weight_kg is not None and not WEIGHT_RANGE_KG[0] <= weight_kg <= WEIGHT_RANGE_KG[1]:
+        raise InputError(f"Weight {weight_kg:g} is outside {WEIGHT_RANGE_KG[0]:g}-{WEIGHT_RANGE_KG[1]:g} kg. "
+                         f"Enter weight in kilograms.")
+
+
 def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_kg: float | None) -> dict:
     notes: list[str] = []
+    if len(files) > 2:
+        raise InputError("Upload at most two MRI files: the end-diastole and end-systole frames.")
+    check_body_size(height_cm, weight_kg)
     loaded = []
     for name, data in files:
         lower = name.lower()
@@ -489,8 +596,6 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
             loaded.append(_load_slice(name, data))
         else:
             raise InputError(f"{name}: MRI must be NIfTI (.nii / .nii.gz), DICOM (.dcm) or an image (.png / .jpg).")
-    if len(loaded) > 2:
-        raise InputError("Upload at most two MRI files: the end-diastole and end-systole frames.")
 
     for item in loaded:
         item["mask"] = _segment(item["volume"])
@@ -505,11 +610,22 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
     result: dict = {"evidence": MODEL_EVIDENCE["mri"], "notes": notes}
 
     if len(volumetric) == 2:
+        first, second = volumetric
+        if first["volume"].shape == second["volume"].shape and np.array_equal(first["volume"], second["volume"]):
+            raise InputError("The two MRI files hold the same images. Upload the end-diastole and the "
+                             "end-systole frame of one scan.")
+        if first["volume"].shape[0] != second["volume"].shape[0] or first["spacing"] != second["spacing"]:
+            raise InputError("The two MRI volumes have a different number of slices or slice spacing, so they "
+                             "are not two frames of the same scan. Upload the end-diastole and end-systole "
+                             "frames from one short-axis cine series.")
         ed, es = sorted(volumetric, key=lambda item: item["ml"]["LV"], reverse=True)
         notes.append(f"{ed['name']} was taken as end-diastole and {es['name']} as end-systole, "
                      f"because its left ventricle is larger.")
-        lv_ef = 100.0 * (1.0 - es["ml"]["LV"] / ed["ml"]["LV"]) if ed["ml"]["LV"] > 0 else float("nan")
-        rv_ef = 100.0 * (1.0 - es["ml"]["RV"] / ed["ml"]["RV"]) if ed["ml"]["RV"] > 0 else float("nan")
+        lv_ef = 100.0 * (1.0 - es["ml"]["LV"] / ed["ml"]["LV"])  # looks_like_heart guarantees an LV
+        if lv_ef < MIN_PLAUSIBLE_EF:
+            raise InputError(f"The two volumes give an ejection fraction of {lv_ef:.1f}%: their left ventricles "
+                             f"are almost the same size. Check that one file is end-diastole and the other "
+                             f"end-systole of the same scan.")
         result["mode"] = "volume_pair"
         result["measurements"] = {
             "lv_end_diastolic_ml": round(ed["ml"]["LV"], 1),
@@ -517,16 +633,19 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
             "lv_ejection_fraction": round(lv_ef, 1),
             "lv_ejection_fraction_category": _ef_category(lv_ef),
             "rv_end_diastolic_ml": round(ed["ml"]["RV"], 1),
-            "rv_ejection_fraction": round(rv_ef, 1),
             "myocardial_mass_g": round(ed["ml"]["MYO"] * 1.05, 1),
         }
+        if ed["ml"]["RV"] > 0:
+            result["measurements"]["rv_ejection_fraction"] = round(100.0 * (1.0 - es["ml"]["RV"] / ed["ml"]["RV"]), 1)
+        else:
+            notes.append("The right ventricle was not found at end-diastole, so RV ejection fraction is not given.")
         ed_slice, es_slice = _middle_slice(ed["mask"]), _middle_slice(es["mask"])
         result["segmentation_image"] = _mri_figure([
             ("End-diastole (heart full)", ed["volume"][ed_slice], ed["mask"][ed_slice]),
             ("End-systole (heart squeezed)", es["volume"][es_slice], es["mask"][es_slice]),
         ])
 
-        if height_cm and weight_kg and height_cm > 0 and weight_kg > 0:
+        if height_cm and weight_kg:
             bundle = models()["diagnosis"]
             features = measurement_features(ed["mask"], es["mask"], ed["spacing"], height_cm / 100.0, weight_kg)
             row = pd.Series(features)
@@ -541,7 +660,11 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
         else:
             notes.append("Enter height and weight to get a diagnosis: the model uses heart size relative to body size.")
     else:
-        item = loaded[0]
+        item = volumetric[0] if volumetric else loaded[0]
+        if len(loaded) > 1:
+            skipped = next(other["name"] for other in loaded if other is not item)
+            notes.append(f"Only {item['name']} was analysed; {skipped} was not used. Ejection fraction needs "
+                         f"two short-axis NIfTI volumes (end-diastole and end-systole).")
         index = _middle_slice(item["mask"])
         result["mode"] = "volume" if item["volume"].shape[0] > 1 else "slice"
         areas = {name: int((item["mask"][index] == label).sum()) for label, name in STRUCTURES.items()}
@@ -564,15 +687,24 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
 # Clinical values against reference ranges
 # ----------------------------------------------------------------------------
 
-def assess_clinical(age: int, gender: str, blood_pressure: int, cholesterol: int, max_heart_rate: int,
-                    chest_pain: str, exercise_angina: str) -> dict:
+AGE_RANGE = (1, 119)
+
+
+def assess_clinical(age: int, gender: str, blood_pressure: int | None, cholesterol: int | None,
+                    max_heart_rate: int | None, chest_pain: str | None, exercise_angina: str | None) -> dict:
+    """Guideline checks on the values that were entered; a value left blank is not checked."""
+    if not AGE_RANGE[0] <= age <= AGE_RANGE[1]:
+        raise InputError(f"Age {age} is outside {AGE_RANGE[0]}-{AGE_RANGE[1]} years.")
     flags = []
+    not_entered = []
 
     def flag(level: str, item: str, text: str):
         flags.append({"level": level, "item": item, "text": text})
 
     # ACC/AHA 2017 blood pressure categories (systolic).
-    if blood_pressure >= 180:
+    if blood_pressure is None:
+        not_entered.append("blood pressure")
+    elif blood_pressure >= 180:
         flag("high", "Blood pressure", f"{blood_pressure} mm Hg is in the hypertensive crisis range (180 or above).")
     elif blood_pressure >= 140:
         flag("moderate", "Blood pressure", f"{blood_pressure} mm Hg is stage 2 hypertension (140 or above).")
@@ -584,15 +716,19 @@ def assess_clinical(age: int, gender: str, blood_pressure: int, cholesterol: int
         flag("ok", "Blood pressure", f"{blood_pressure} mm Hg is in the normal range.")
 
     # NCEP ATP III total cholesterol bands.
-    if cholesterol >= 240:
+    if cholesterol is None:
+        not_entered.append("cholesterol")
+    elif cholesterol >= 240:
         flag("moderate", "Cholesterol", f"{cholesterol} mg/dL is high (240 or above).")
     elif cholesterol >= 200:
         flag("info", "Cholesterol", f"{cholesterol} mg/dL is borderline high (200-239).")
     else:
         flag("ok", "Cholesterol", f"{cholesterol} mg/dL is desirable (below 200).")
 
-    typical = chest_pain.strip().lower() == "typical angina"
-    exertional = exercise_angina.strip().lower() == "yes"
+    if chest_pain is None and exercise_angina is None:
+        not_entered.append("symptoms")
+    typical = (chest_pain or "").strip().lower() == "typical angina"
+    exertional = (exercise_angina or "").strip().lower() == "yes"
     if typical and exertional:
         flag("high", "Symptoms", "Typical angina brought on by exercise is a classic sign of coronary artery "
                                  "disease and needs medical assessment.")
@@ -604,9 +740,14 @@ def assess_clinical(age: int, gender: str, blood_pressure: int, cholesterol: int
         flag("info", "Age", f"Age {age} is itself a cardiovascular risk factor ({risk_age} or over).")
 
     predicted_max = 220 - age
-    flag("info", "Maximum heart rate",
-         f"{max_heart_rate} bpm is {100 * max_heart_rate / predicted_max:.0f}% of the age-predicted maximum "
-         f"({predicted_max} bpm). Only meaningful if measured during an exercise test.")
+    if max_heart_rate is None:
+        not_entered.append("maximum heart rate")
+    else:
+        flag("info", "Maximum heart rate",
+             f"{max_heart_rate} bpm is {100 * max_heart_rate / predicted_max:.0f}% of the age-predicted maximum "
+             f"({predicted_max} bpm). Only meaningful if measured during an exercise test.")
+    if not_entered:
+        flag("info", "Not entered", f"No {', '.join(not_entered)} given, so {'it was' if len(not_entered) == 1 else 'they were'} not checked.")
 
     return {
         "flags": flags,

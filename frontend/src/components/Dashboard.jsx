@@ -371,11 +371,11 @@ function NewAnalysisPage({ result, setResult, setPage, token }) {
     name: '',
     age: '',
     gender: 'Male',
-    blood_pressure: 130,
-    cholesterol: 210,
-    chest_pain: 'Typical angina',
-    max_heart_rate: 150,
-    exercise_angina: 'No',
+    blood_pressure: '',
+    cholesterol: '',
+    chest_pain: '',
+    max_heart_rate: '',
+    exercise_angina: '',
     height_cm: '',
     weight_kg: ''
   });
@@ -418,7 +418,11 @@ function NewAnalysisPage({ result, setResult, setPage, token }) {
       });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Analysis backend service unavailable');
+        // FastAPI validation errors arrive as a list of {loc, msg}; show them as text.
+        const detail = Array.isArray(errData.detail)
+          ? errData.detail.map(d => `${(d.loc || []).slice(-1)[0] || 'input'}: ${d.msg}`).join('; ')
+          : errData.detail;
+        throw new Error(detail || `Analysis failed (HTTP ${response.status})`);
       }
       const out = await response.json();
       // Let the stage list finish if the models answered faster than it animates.
@@ -456,7 +460,7 @@ function NewAnalysisPage({ result, setResult, setPage, token }) {
       <div className="analysis-grid">
         <Uploader
           title="ECG data (Required)"
-          subtitle="12-lead CSV, or a flat photo or scan of a 12x1 ECG printout"
+          subtitle="12-lead CSV of 10 s (add a time column if not 100 Hz), or a flat scan of a 12x1 printout. PDFs are not supported yet."
           accept=".csv,.txt,.png,.jpg,.jpeg"
           file={ecg}
           setFile={setEcg}
@@ -495,16 +499,17 @@ function NewAnalysisPage({ result, setResult, setPage, token }) {
               </select>
             </label>
             <label>Blood pressure (mm Hg)
-              <input type="number" value={patient.blood_pressure} onChange={e => update('blood_pressure', e.target.value)} />
+              <input type="number" placeholder="optional" value={patient.blood_pressure} onChange={e => update('blood_pressure', e.target.value)} />
             </label>
             <label>Cholesterol (mg/dL)
-              <input type="number" value={patient.cholesterol} onChange={e => update('cholesterol', e.target.value)} />
+              <input type="number" placeholder="optional" value={patient.cholesterol} onChange={e => update('cholesterol', e.target.value)} />
             </label>
             <label>Maximum heart rate
-              <input type="number" value={patient.max_heart_rate} onChange={e => update('max_heart_rate', e.target.value)} />
+              <input type="number" placeholder="optional" value={patient.max_heart_rate} onChange={e => update('max_heart_rate', e.target.value)} />
             </label>
             <label>Chest-pain type
               <select value={patient.chest_pain} onChange={e => update('chest_pain', e.target.value)}>
+                <option value="">Not known</option>
                 <option>Typical angina</option>
                 <option>Atypical angina</option>
                 <option>Non-anginal pain</option>
@@ -513,6 +518,7 @@ function NewAnalysisPage({ result, setResult, setPage, token }) {
             </label>
             <label>Exercise angina
               <select value={patient.exercise_angina} onChange={e => update('exercise_angina', e.target.value)}>
+                <option value="">Not known</option>
                 <option>Yes</option>
                 <option>No</option>
               </select>

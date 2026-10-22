@@ -337,11 +337,11 @@ async def analyze(
     name: str = Form(...),
     age: int = Form(...),
     gender: str = Form(...),
-    blood_pressure: int = Form(...),
-    cholesterol: int = Form(...),
-    chest_pain: str = Form(...),
-    max_heart_rate: int = Form(...),
-    exercise_angina: str = Form(...),
+    blood_pressure: Optional[int] = Form(None),
+    cholesterol: Optional[int] = Form(None),
+    chest_pain: Optional[str] = Form(None),
+    max_heart_rate: Optional[int] = Form(None),
+    exercise_angina: Optional[str] = Form(None),
     height_cm: Optional[float] = Form(None),
     weight_kg: Optional[float] = Form(None),
     ecg_file: UploadFile = File(...),
@@ -362,10 +362,12 @@ async def analyze(
     mri_uploads = [(f.filename or "mri", await f.read()) for f in mri_file]
 
     def run():
-        ecg = cardiac_ai.analyze_ecg(ecg_file.filename or "ecg.csv", ecg_bytes)
-        mri = cardiac_ai.analyze_mri(mri_uploads, height_cm, weight_kg)
+        # The quick checks on typed values first, so a typo fails before the models run.
         clinical = cardiac_ai.assess_clinical(age, gender, blood_pressure, cholesterol, max_heart_rate,
                                               chest_pain, exercise_angina)
+        cardiac_ai.check_body_size(height_cm, weight_kg)
+        ecg = cardiac_ai.analyze_ecg(ecg_file.filename or "ecg.csv", ecg_bytes)
+        mri = cardiac_ai.analyze_mri(mri_uploads, height_cm, weight_kg)
         return ecg, mri, clinical, cardiac_ai.summarize(ecg, mri, clinical)
 
     try:
