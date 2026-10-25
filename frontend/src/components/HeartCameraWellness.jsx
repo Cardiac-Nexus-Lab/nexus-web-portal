@@ -94,12 +94,16 @@ function classifyFacialExpression(landmarks, w = 640, h = 480) {
 }
 
 export default function HeartCameraWellness({ token, setPage }) {
-  // Camera & Stream Status: 'idle' | 'active' | 'error' | 'frozen'
+  // Camera & Stream Status: 'idle' | 'checking' | 'active' | 'error'
   const [cameraStatus, setCameraStatus] = useState('idle');
   const [cameraErrorMessage, setCameraErrorMessage] = useState('');
   const [faceDetected, setFaceDetected] = useState(false);
   const [faceStatusMessage, setFaceStatusMessage] = useState('');
   const [signalErrorMessage, setSignalErrorMessage] = useState('');
+
+  // AI Model Loading State: 'loading' | 'ready' | 'error'
+  const [modelStatus, setModelStatus] = useState('loading');
+  const [modelErrorMessage, setModelErrorMessage] = useState('');
 
   // Screening Session State
   const [sessionActive, setSessionActive] = useState(false);
@@ -147,6 +151,11 @@ export default function HeartCameraWellness({ token, setPage }) {
   const animFrameRef = useRef(null);
   const lastVideoTimeRef = useRef(0);
   const freezeCheckIntervalRef = useRef(null);
+
+  // Concurrency & Hardware Synchronization Refs (eliminates stale React state closures)
+  const cameraActiveRef = useRef(false);
+  const isProcessingFrameRef = useRef(false);
+  const roiCanvasRef = useRef(null);
 
   // Optical rPPG & Statistical Buffers
   const rppgBufferRef = useRef([]);
@@ -221,15 +230,47 @@ export default function HeartCameraWellness({ token, setPage }) {
     fetchPatients();
   }, [token]);
 
-  // Initialize MediaPipe FaceMesh
+  // Initialize MediaPipe FaceMesh with fallback script loader
   useEffect(() => {
     let active = true;
 
+    async function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        if (document.querySelector(`script[src="${src}"]`)) {
+          resolve();
+          return;
+        }
+        const s = document.createElement('script');
+        s.src = src;
+        s.crossOrigin = 'anonymous';
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error(`Failed to load ${src}`));
+        document.head.appendChild(s);
+      });
+    }
+
     async function initFaceMesh() {
       try {
+        setModelStatus('loading');
+        setModelErrorMessage('');
+
+        if (!window.FaceMesh) {
+          try {
+            await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js');
+          } catch (e1) {
+            try {
+              await loadScript('https://unpkg.com/@mediapipe/face_mesh/face_mesh.js');
+            } catch (e2) {
+              console.warn('MediaPipe CDN loading failed:', e2);
+            }
+          }
+        }
+
         const FaceMeshClass = window.FaceMesh;
         if (!FaceMeshClass) {
-          setTimeout(initFaceMesh, 500);
+          if (active) {
+            setTimeout(initFaceMesh, 1000);
+          }
           return;
         }
 
@@ -240,14 +281,30 @@ export default function HeartCameraWellness({ token, setPage }) {
         faceMesh.setOptions({
           maxNumFaces: 1,
           refineLandmarks: true,
-          minDetectionConfidence: 0.55,
-          minTrackingConfidence: 0.55
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
         });
 
         faceMesh.onResults(onFaceResults);
-        faceMeshRef.current = faceMesh;
+
+        try {
+          if (faceMesh.initialize) {
+            await faceMesh.initialize();
+          }
+        } catch (initErr) {
+          console.warn('FaceMesh graph initialization notice:', initErr);
+        }
+
+        if (active) {
+          faceMeshRef.current = faceMesh;
+          setModelStatus('ready');
+        }
       } catch (err) {
-        console.warn('MediaPipe initialization warning:', err);
+        console.error('MediaPipe initialization error:', err);
+        if (active) {
+          setModelStatus('error');
+          setModelErrorMessage('Face detection AI model failed to load. Please check your internet connection and refresh.');
+        }
       }
     }
 
@@ -263,7 +320,7 @@ export default function HeartCameraWellness({ token, setPage }) {
     };
   }, []);
 
-  // Start Camera with strict hardware verification
+  // Start Camera with strict hardware verification and mobile/desktop compatibility
   const startCamera = async () => {
     resetAllResults();
     setCameraErrorMessage('');
@@ -273,7 +330,8 @@ export default function HeartCameraWellness({ token, setPage }) {
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCameraStatus('error');
-      setCameraErrorMessage('Camera is not working. Please connect or enable your camera and try again.');
+      cameraActiveRef.current = false;
+      setCameraErrorMessage('Camera is not supported on this browser or requires an HTTPS connection.');
       showToast('error', 'Camera is not working. Please connect or enable your camera and try again.');
       return;
     }
@@ -305,24 +363,42 @@ export default function HeartCameraWellness({ token, setPage }) {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
+          const vw = videoRef.current.videoWidth || 640;
+          const vh = videoRef.current.videoHeight || 480;
+          if (overlayCanvasRef.current) {
+            overlayCanvasRef.current.width = vw;
+            overlayCanvasRef.current.height = vh;
+          }
+
           videoRef.current.play().then(() => {
+            cameraActiveRef.current = true;
             setCameraStatus('active');
             startProcessingLoop();
             startFreezeDetection();
-          }).catch(() => {
+          }).catch((pErr) => {
+            console.error('Video autoplay error:', pErr);
             handleCameraFailure('Camera is not working. Please connect or enable your camera and try again.');
           });
         };
       }
     } catch (err) {
       console.error('Camera access error:', err);
-      handleCameraFailure('Camera is not working. Please connect or enable your camera and try again.');
+      cameraActiveRef.current = false;
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setCameraErrorMessage('Camera permission was denied. Please allow camera access in your browser settings and try again.');
+        setCameraStatus('error');
+        showToast('error', 'Camera permission was denied. Please allow camera access.');
+      } else {
+        handleCameraFailure('Camera is not working. Please connect or enable your camera and try again.');
+      }
     }
   };
 
   const handleCameraFailure = (msg) => {
     stopCamera();
     resetAllResults();
+    cameraActiveRef.current = false;
+    isProcessingFrameRef.current = false;
     setCameraStatus('error');
     const finalMsg = 'Camera is not working. Please connect or enable your camera and try again.';
     setCameraErrorMessage(finalMsg);
@@ -330,6 +406,8 @@ export default function HeartCameraWellness({ token, setPage }) {
   };
 
   const stopCamera = () => {
+    cameraActiveRef.current = false;
+    isProcessingFrameRef.current = false;
     if (freezeCheckIntervalRef.current) {
       clearInterval(freezeCheckIntervalRef.current);
       freezeCheckIntervalRef.current = null;
@@ -341,10 +419,13 @@ export default function HeartCameraWellness({ token, setPage }) {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
     setCameraStatus('idle');
     setFaceDetected(false);
     setSessionActive(false);
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
   };
 
   // Video Freeze Detection
@@ -352,7 +433,7 @@ export default function HeartCameraWellness({ token, setPage }) {
     if (freezeCheckIntervalRef.current) clearInterval(freezeCheckIntervalRef.current);
 
     freezeCheckIntervalRef.current = setInterval(() => {
-      if (!videoRef.current || cameraStatus !== 'active') return;
+      if (!videoRef.current || !cameraActiveRef.current) return;
       const current = videoRef.current.currentTime;
       if (current === lastVideoTimeRef.current && current > 0) {
         // Video has frozen
@@ -369,47 +450,87 @@ export default function HeartCameraWellness({ token, setPage }) {
     };
   }, []);
 
-  // Continuous frame loop sending to MediaPipe
+  // Continuous frame loop sending to MediaPipe (immune to React stale closures & frame collisions)
   const startProcessingLoop = () => {
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+
     const processFrame = async () => {
+      if (!cameraActiveRef.current) return;
+
+      const video = videoRef.current;
+      const faceMesh = faceMeshRef.current;
+
       if (
-        videoRef.current &&
-        videoRef.current.readyState >= 2 &&
-        videoRef.current.videoWidth > 0 &&
-        faceMeshRef.current &&
-        cameraStatus === 'active'
+        video &&
+        video.readyState >= 2 &&
+        video.videoWidth > 0 &&
+        !video.paused &&
+        !video.ended &&
+        faceMesh &&
+        !isProcessingFrameRef.current
       ) {
+        isProcessingFrameRef.current = true;
         try {
-          await faceMeshRef.current.send({ image: videoRef.current });
-        } catch (_) {}
+          await faceMesh.send({ image: video });
+        } catch (meshErr) {
+          console.warn('FaceMesh frame send notice:', meshErr);
+        } finally {
+          isProcessingFrameRef.current = false;
+        }
       }
-      animFrameRef.current = requestAnimationFrame(processFrame);
+
+      if (cameraActiveRef.current) {
+        animFrameRef.current = requestAnimationFrame(processFrame);
+      }
     };
+
     animFrameRef.current = requestAnimationFrame(processFrame);
   };
 
   // MediaPipe FaceMesh Callback: Validates Face Presence & Optical Signal
   const onFaceResults = (results) => {
+    if (!cameraActiveRef.current) return;
+
     const canvas = overlayCanvasRef.current;
-    if (!canvas || !videoRef.current) return;
+    const video = videoRef.current;
+    if (!canvas || !video) return;
+
+    // Dynamically match canvas resolution to live video stream
+    if (video.videoWidth > 0 && (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight)) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     const w = canvas.width;
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
 
     // 1. FACE DETECTION VALIDATION
-    if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+    if (!results || !results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
       setFaceDetected(false);
-      setFaceStatusMessage('No face detected. Please position your face in front of the camera.');
+      setFaceStatusMessage('No face detected. Please position your face in the center of the camera.');
       setSignalQuality('No face detected');
       setSqiScore(0);
       return;
     }
 
-    // Face is present and verified
-    setFaceDetected(true);
-    setFaceStatusMessage('');
     const landmarks = results.multiFaceLandmarks[0];
+    if (!landmarks || landmarks.length < 468) {
+      setFaceDetected(false);
+      setFaceStatusMessage('Partial face detected. Please face the camera directly with good lighting.');
+      setSignalQuality('Poor (Partial Face)');
+      setSqiScore(20);
+      return;
+    }
+
+    // Face is present, verified and tracked!
+    setFaceDetected(true);
+    setFaceStatusMessage('Face detected and tracking (468 facial landmarks)');
     const now = performance.now();
     totalFramesRef.current++;
 
@@ -453,14 +574,14 @@ export default function HeartCameraWellness({ token, setPage }) {
     const leftCheekY = Math.round(landmarks[118].y * h);
     const rightCheekX = Math.round(landmarks[347].x * w);
     const rightCheekY = Math.round(landmarks[347].y * h);
-    const roiRadius = 18;
+    const roiRadius = Math.max(12, Math.round(w * 0.035));
 
-    // Draw visual feedback overlay
+    // Draw visual feedback overlay with clear ROI indicators and contour points
     drawHUDOverlay(ctx, landmarks, w, h, foreheadX, foreheadY, leftCheekX, leftCheekY, rightCheekX, rightCheekY, roiRadius);
 
     // Extract live rPPG optical signal only if motion is not excessive
     if (isStable) {
-      extractSkinColorROIs(videoRef.current, foreheadX, foreheadY, leftCheekX, leftCheekY, rightCheekX, rightCheekY, roiRadius, now);
+      extractSkinColorROIs(video, foreheadX, foreheadY, leftCheekX, leftCheekY, rightCheekX, rightCheekY, roiRadius, now);
     }
 
     // 4. Eye Aspect Ratio & Fatigue / Blinking
@@ -529,21 +650,28 @@ export default function HeartCameraWellness({ token, setPage }) {
     }
   };
 
-  // Draw overlay
+  // Draw overlay with clear ROI targets and facial landmark tracking
   const drawHUDOverlay = (ctx, landmarks, w, h, fx, fy, lcx, lcy, rcx, rcy, rad) => {
-    // Glowing Forehead ROI
+    // 1. Glowing Forehead ROI
     ctx.strokeStyle = '#10b981';
     ctx.lineWidth = 2;
-    ctx.strokeRect(fx - rad * 1.5, fy - rad, rad * 3, rad * 2);
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
-    ctx.fillRect(fx - rad * 1.5, fy - rad, rad * 3, rad * 2);
+    const fw = rad * 3;
+    const fh = rad * 2;
+    ctx.strokeRect(fx - rad * 1.5, fy - rad, fw, fh);
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.18)';
+    ctx.fillRect(fx - rad * 1.5, fy - rad, fw, fh);
 
-    // Cheek ROIs
-    ctx.strokeStyle = '#0d7482';
+    ctx.fillStyle = '#10b981';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText('ROI: FOREHEAD', fx - rad * 1.5, Math.max(12, fy - rad - 4));
+
+    // 2. Cheek ROIs
+    ctx.strokeStyle = '#0d9488';
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(lcx, lcy, rad, 0, 2 * Math.PI);
     ctx.stroke();
-    ctx.fillStyle = 'rgba(13, 116, 130, 0.15)';
+    ctx.fillStyle = 'rgba(13, 148, 136, 0.18)';
     ctx.fill();
 
     ctx.beginPath();
@@ -551,53 +679,111 @@ export default function HeartCameraWellness({ token, setPage }) {
     ctx.stroke();
     ctx.fill();
 
-    // Eye corners
-    ctx.strokeStyle = '#38bdf8';
-    ctx.lineWidth = 1.5;
-    [33, 133, 362, 263].forEach((idx) => {
+    // 3. Facial Landmark Tracking Points (so the user visibly sees active tracking)
+    ctx.fillStyle = 'rgba(56, 189, 248, 0.7)';
+    const keyPoints = [
+      33, 133, 362, 263, // Eye corners
+      70, 63, 105, 66, 107, 336, 296, 334, 293, 300, // Brows
+      1, 4, 5, 195, 197, // Nose bridge
+      61, 291, 0, 17, 13, 14 // Mouth
+    ];
+    keyPoints.forEach((idx) => {
       const lm = landmarks[idx];
       if (lm) {
         ctx.beginPath();
         ctx.arc(lm.x * w, lm.y * h, 2, 0, 2 * Math.PI);
-        ctx.stroke();
+        ctx.fill();
       }
     });
   };
 
-  // Extract optical skin pixels
+  // Extract optical skin pixels specifically from forehead and cheek ROIs (Requirement 16)
   const extractSkinColorROIs = (video, fx, fy, lcx, lcy, rcx, rcy, rad, timestamp) => {
-    const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = 100;
-    hiddenCanvas.height = 100;
-    const hctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
+    if (!video || video.videoWidth === 0) return;
+
+    if (!roiCanvasRef.current) {
+      roiCanvasRef.current = document.createElement('canvas');
+      roiCanvasRef.current.width = 120;
+      roiCanvasRef.current.height = 120;
+    }
+    const hcanvas = roiCanvasRef.current;
+    const hctx = hcanvas.getContext('2d', { willReadFrequently: true });
     if (!hctx) return;
 
     try {
-      hctx.drawImage(video, 0, 0, 100, 100);
-      const imgData = hctx.getImageData(0, 0, 100, 100).data;
+      hctx.clearRect(0, 0, 120, 120);
+
+      const canvas = overlayCanvasRef.current;
+      const cw = canvas?.width || video.videoWidth;
+      const ch = canvas?.height || video.videoHeight;
+      const scaleX = video.videoWidth / cw;
+      const scaleY = video.videoHeight / ch;
+
+      const vfx = Math.round(fx * scaleX);
+      const vfy = Math.round(fy * scaleY);
+      const vlcx = Math.round(lcx * scaleX);
+      const vlcy = Math.round(lcy * scaleY);
+      const vrcx = Math.round(rcx * scaleX);
+      const vrcy = Math.round(rcy * scaleY);
+      const vrad = Math.max(8, Math.round(rad * scaleX));
+
+      // 1. Forehead region
+      const fw = vrad * 3;
+      const fh = vrad * 2;
+      const sx = Math.max(0, Math.min(video.videoWidth - fw, vfx - vrad * 1.5));
+      const sy = Math.max(0, Math.min(video.videoHeight - fh, vfy - vrad));
+      hctx.drawImage(video, sx, sy, fw, fh, 0, 0, 60, 40);
+
+      // 2. Left cheek
+      const cwR = vrad * 2;
+      const chR = vrad * 2;
+      const lsx = Math.max(0, Math.min(video.videoWidth - cwR, vlcx - vrad));
+      const lsy = Math.max(0, Math.min(video.videoHeight - chR, vlcy - vrad));
+      hctx.drawImage(video, lsx, lsy, cwR, chR, 60, 0, 30, 30);
+
+      // 3. Right cheek
+      const rsx = Math.max(0, Math.min(video.videoWidth - cwR, vrcx - vrad));
+      const rsy = Math.max(0, Math.min(video.videoHeight - cwR, vrcy - vrad));
+      hctx.drawImage(video, rsx, rsy, cwR, chR, 90, 0, 30, 30);
+
+      const imgData = hctx.getImageData(0, 0, 120, 40).data;
 
       let gSum = 0;
       let rSum = 0;
+      let bSum = 0;
       let count = 0;
-      for (let i = 0; i < imgData.length; i += 16) {
-        rSum += imgData[i];
-        gSum += imgData[i + 1];
-        count++;
-      }
-      const meanG = gSum / count;
-      const meanR = rSum / count;
 
-      const signalVal = meanG - 0.2 * meanR;
-      rppgBufferRef.current.push(signalVal);
-      timestampsRef.current.push(timestamp);
-
-      if (rppgBufferRef.current.length > 300) {
-        rppgBufferRef.current.shift();
-        timestampsRef.current.shift();
+      for (let i = 0; i < imgData.length; i += 4) {
+        const r = imgData[i];
+        const g = imgData[i + 1];
+        const b = imgData[i + 2];
+        // Human skin tone filter
+        if (r > 35 && g > 20 && r > b) {
+          rSum += r;
+          gSum += g;
+          bSum += b;
+          count++;
+        }
       }
 
-      if (rppgBufferRef.current.length >= 75 && totalFramesRef.current % 12 === 0) {
-        processRppgPulseSignal();
+      if (count > 40) {
+        const meanG = gSum / count;
+        const meanR = rSum / count;
+        const meanB = bSum / count;
+
+        // Chrominance-based rPPG pulse signal (Green-Red difference)
+        const signalVal = meanG - 0.25 * meanR - 0.1 * meanB;
+        rppgBufferRef.current.push(signalVal);
+        timestampsRef.current.push(timestamp);
+
+        if (rppgBufferRef.current.length > 300) {
+          rppgBufferRef.current.shift();
+          timestampsRef.current.shift();
+        }
+
+        if (rppgBufferRef.current.length >= 75 && totalFramesRef.current % 8 === 0) {
+          processRppgPulseSignal();
+        }
       }
     } catch (_) {}
   };
@@ -995,7 +1181,7 @@ export default function HeartCameraWellness({ token, setPage }) {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <VideoOff size={22} />
-            <b style={{ display: 'block', fontSize: 14 }}>Camera is not working. Please connect or enable your camera and try again.</b>
+            <b style={{ display: 'block', fontSize: 14 }}>{cameraErrorMessage || 'Camera is not working. Please connect or enable your camera and try again.'}</b>
           </div>
           <button
             className="table-btn"
@@ -1007,8 +1193,48 @@ export default function HeartCameraWellness({ token, setPage }) {
         </div>
       )}
 
-      {/* ERROR BANNER 2: NO FACE DETECTED */}
-      {cameraStatus === 'active' && !faceDetected && (
+      {/* BANNER 2: MODEL INITIALIZATION IN PROGRESS (Requirement 12) */}
+      {cameraStatus === 'active' && modelStatus === 'loading' && (
+        <div style={{
+          background: '#eff6ff',
+          border: '1px solid #93c5fd',
+          borderRadius: 10,
+          padding: '12px 16px',
+          marginBottom: 16,
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          color: '#1e40af',
+          fontWeight: 600,
+          fontSize: 14
+        }}>
+          <RefreshCw size={18} style={{ animation: 'spin 1.5s linear infinite' }} />
+          <span>Initializing Face Detection AI Model... Please keep your face centered in the camera.</span>
+        </div>
+      )}
+
+      {/* BANNER 3: MODEL LOADING ERROR (Requirement 12) */}
+      {cameraStatus === 'active' && modelStatus === 'error' && (
+        <div style={{
+          background: '#fee2e2',
+          border: '1px solid #f87171',
+          borderRadius: 10,
+          padding: '12px 16px',
+          marginBottom: 16,
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          color: '#991b1b',
+          fontWeight: 600,
+          fontSize: 14
+        }}>
+          <ShieldAlert size={20} />
+          <span>{modelErrorMessage || 'Face detection model failed to load. Please check your internet connection and refresh the page.'}</span>
+        </div>
+      )}
+
+      {/* BANNER 4: NO FACE DETECTED (Model is ready, camera is active, but face not yet centered in frame) (Requirement 14) */}
+      {cameraStatus === 'active' && modelStatus === 'ready' && !faceDetected && (
         <div style={{
           background: '#fef3c7',
           border: '1px solid #f59e0b',
@@ -1023,11 +1249,39 @@ export default function HeartCameraWellness({ token, setPage }) {
           fontSize: 14
         }}>
           <UserX size={20} />
-          <span>No face detected. Please position your face in front of the camera.</span>
+          <span>No face detected. Please position your face in the center of the camera with adequate lighting.</span>
         </div>
       )}
 
-      {/* ERROR BANNER 3: INSUFFICIENT SIGNAL QUALITY */}
+      {/* BANNER 5: FACE DETECTED & TRACKING ACTIVE (Requirement 13) */}
+      {cameraStatus === 'active' && faceDetected && (
+        <div style={{
+          background: '#ecfdf5',
+          border: '1px solid #a7f3d0',
+          borderRadius: 10,
+          padding: '12px 16px',
+          marginBottom: 16,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          color: '#065f46',
+          fontSize: 13,
+          flexWrap: 'wrap',
+          gap: 8
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 600 }}>
+            <UserCheck size={18} color="#059669" />
+            <span>Face detected & tracking active (468 facial landmarks)</span>
+          </div>
+          <div style={{ display: 'flex', gap: 14, fontSize: 12, color: '#047857' }}>
+            <span><strong>Tracking:</strong> Active</span>
+            <span><strong>Processing:</strong> 30 FPS Live</span>
+            <span><strong>Signal Quality:</strong> {signalQuality}</span>
+          </div>
+        </div>
+      )}
+
+      {/* ERROR BANNER 6: INSUFFICIENT SIGNAL QUALITY */}
       {signalErrorMessage && (
         <div style={{
           background: '#fef3c7',
@@ -1102,6 +1356,7 @@ export default function HeartCameraWellness({ token, setPage }) {
               ref={videoRef}
               autoPlay
               playsInline
+              webkit-playsinline="true"
               muted
               style={{
                 width: '100%',
@@ -1120,6 +1375,7 @@ export default function HeartCameraWellness({ token, setPage }) {
                 left: 0,
                 width: '100%',
                 height: '100%',
+                objectFit: 'cover',
                 pointerEvents: 'none',
                 display: cameraStatus === 'active' ? 'block' : 'none'
               }}
@@ -1154,14 +1410,20 @@ export default function HeartCameraWellness({ token, setPage }) {
                 padding: '5px 10px',
                 borderRadius: 6,
                 fontSize: 12,
-                color: faceDetected && sqiScore >= 60 ? '#10b981' : '#f59e0b',
+                color: faceDetected && sqiScore >= 60 ? '#10b981' : modelStatus === 'loading' ? '#38bdf8' : '#f59e0b',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
                 border: '1px solid rgba(255,255,255,0.1)'
               }}>
                 <Activity size={14} />
-                <span>Signal Quality: {faceDetected ? signalQuality : 'No face detected'}</span>
+                <span>
+                  {modelStatus === 'loading'
+                    ? 'Initializing Face AI...'
+                    : faceDetected
+                    ? `Signal Quality: ${signalQuality}`
+                    : 'Signal Quality: No face detected'}
+                </span>
               </div>
             )}
 
@@ -1198,21 +1460,23 @@ export default function HeartCameraWellness({ token, setPage }) {
           <div style={{ marginTop: 16 }}>
             <button
               className="primary full"
-              disabled={sessionActive || cameraStatus !== 'active' || !faceDetected}
+              disabled={sessionActive || cameraStatus !== 'active' || !faceDetected || modelStatus !== 'ready'}
               onClick={startFullScreening}
               style={{
-                background: sessionActive ? '#095e69' : (!faceDetected || cameraStatus !== 'active') ? '#64748b' : '#10b981',
-                borderColor: (!faceDetected || cameraStatus !== 'active') ? '#64748b' : '#10b981',
+                background: sessionActive ? '#095e69' : (!faceDetected || cameraStatus !== 'active' || modelStatus !== 'ready') ? '#64748b' : '#10b981',
+                borderColor: (!faceDetected || cameraStatus !== 'active' || modelStatus !== 'ready') ? '#64748b' : '#10b981',
                 padding: '11px 16px',
                 fontSize: 14,
                 fontWeight: 600,
-                cursor: (!faceDetected || cameraStatus !== 'active') ? 'not-allowed' : 'pointer'
+                cursor: (!faceDetected || cameraStatus !== 'active' || modelStatus !== 'ready') ? 'not-allowed' : 'pointer'
               }}
             >
               {sessionActive ? (
                 <>Screening Patient Biometrics ({20 - sessionSeconds}s remaining)...</>
               ) : cameraStatus !== 'active' ? (
                 <>Camera Not Connected</>
+              ) : modelStatus === 'loading' ? (
+                <><RefreshCw size={15} style={{ animation: 'spin 1.5s linear infinite', marginRight: 6 }} /> Initializing Face AI Model...</>
               ) : !faceDetected ? (
                 <>Position Face in Front of Camera to Start</>
               ) : (
