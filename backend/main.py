@@ -4,11 +4,12 @@
 - Passwords: NEVER stored in backend database
 - API Security: HttpOnly Cookies + Bearer Firebase ID Token
 """
+import hashlib
 import json
 import os
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 
 import google.auth.transport.requests
@@ -20,6 +21,8 @@ from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, D
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
+
+import email_service
 
 # Load environment variables from .env file
 load_dotenv()
@@ -53,8 +56,32 @@ class DBUser(Base):
     photo_url = Column(String, nullable=True)
     role = Column(String, default="Not Set")
     institution = Column(String, default="Not Set")
+    is_verified = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     last_login = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class DBEmailVerification(Base):
+    __tablename__ = "email_verifications"
+
+    id = Column(String, primary_key=True, index=True)
+    email = Column(String, index=True, nullable=False)
+    token_hash = Column(String, index=True, nullable=False)
+    otp_hash = Column(String, index=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    is_used = Column(Boolean, default=False)
+    attempts = Column(Integer, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+def hash_otp(email: str, otp: str) -> str:
+    """Computes SHA-256 hash of the salted OTP (email + OTP)."""
+    return hashlib.sha256(f"{email.lower().strip()}:{otp.strip()}".encode("utf-8")).hexdigest()
+
+
+def hash_token(token: str) -> str:
+    """Computes SHA-256 hash of the verification token."""
+    return hashlib.sha256(token.strip().encode("utf-8")).hexdigest()
 
 
 class DBPatient(Base):
@@ -142,13 +169,33 @@ app = FastAPI(title="Cardiac Nexus API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "https://cardiac-nexus.vercel.app",
+        "https://cardiac-nexus-lab.vercel.app"
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Pydantic Schemas
+class CheckEmailRequest(BaseModel):
+    email: str
+
+class SendVerificationRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+    uid: Optional[str] = None
+
+class VerifyOtpRequest(BaseModel):
+    email: str
+    otp: str
+
 class FirebaseSyncRequest(BaseModel):
     idToken: str
 
@@ -227,7 +274,8 @@ def verify_firebase_id_token(token: str) -> dict:
             "uid": uid,
             "email": email.lower().strip(),
             "name": decoded.get("name") or email.split("@")[0].capitalize(),
-            "provider": decoded.get("firebase", {}).get("sign_in_provider", "firebase")
+            "provider": decoded.get("firebase", {}).get("sign_in_provider", "firebase"),
+            "email_verified": bool(decoded.get("email_verified", False))
         }
     except HTTPException:
         raise
@@ -266,17 +314,27 @@ def get_current_user_from_token(
 
     if not user:
         user = DBUser(
-            id=f"usr_{int(time.time())}",
+            id=f"usr_{int(time.time())}_{secrets.token_hex(4)}",
             firebase_uid=firebase_data["uid"],
             name=firebase_data["name"],
             email=firebase_data["email"],
             auth_provider=firebase_data["provider"],
+            is_verified=firebase_data.get("email_verified", False) or firebase_data.get("provider") in ("google.com", "google"),
             role="Not Set",
             institution="Not Set"
         )
         db.add(user)
         db.commit()
         db.refresh(user)
+
+    # Strictly enforce email verification for workspace access
+    is_google = user.auth_provider in ("google.com", "google") or firebase_data.get("provider") in ("google.com", "google")
+    is_email_verified = is_google or user.is_verified or firebase_data.get("email_verified", False)
+    if not is_email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email address not verified. Please verify your email before accessing Cardiac Nexus workspace."
+        )
 
     return user
 
@@ -289,28 +347,341 @@ def health():
         "version": "2.0.0"
     }
 
+@app.get("/api/auth/smtp-status")
+def get_smtp_status():
+    """Checks whether backend SMTP is configured and operational."""
+    configured = email_service.is_smtp_configured()
+    cfg = email_service.get_smtp_config()
+    safe_config = {
+        "configured": configured,
+        "host": cfg["host"] or "Not configured",
+        "port": cfg["port"],
+        "user": cfg["user"][:3] + "***@" + cfg["user"].split("@")[-1] if "@" in cfg["user"] else (cfg["user"][:3] + "***" if cfg["user"] else "None"),
+        "from_email": cfg["from_email"] or "None",
+        "use_tls": cfg["use_tls"],
+        "use_ssl": cfg["use_ssl"],
+    }
+    if configured:
+        ok, msg = email_service.test_smtp_connection()
+        safe_config["connection_test"] = {"success": ok, "message": msg}
+    else:
+        safe_config["connection_test"] = {"success": False, "message": "SMTP is not configured in backend/.env"}
+    return safe_config
+
+@app.post("/api/auth/check-email")
+def check_email(req: CheckEmailRequest, db: Session = Depends(get_db)):
+    """Checks whether an email address is already registered in the system."""
+    clean_email = req.email.lower().strip()
+    if not clean_email or "@" not in clean_email:
+        raise HTTPException(status_code=400, detail="Invalid email address format")
+    
+    user = db.query(DBUser).filter(DBUser.email == clean_email).first()
+    if user:
+        return {
+            "exists": True,
+            "is_verified": user.is_verified,
+            "auth_provider": user.auth_provider,
+            "message": "This email address is already registered."
+        }
+    return {
+        "exists": False,
+        "is_verified": False,
+        "auth_provider": None,
+        "message": "Email is available for registration."
+    }
+
+@app.get("/api/auth/check-email-status")
+def check_email_status(email: str, db: Session = Depends(get_db)):
+    """Returns verification status for a specific email."""
+    clean_email = email.lower().strip()
+    user = db.query(DBUser).filter(DBUser.email == clean_email).first()
+    if user:
+        return {"email": clean_email, "exists": True, "is_verified": bool(user.is_verified)}
+    return {"email": clean_email, "exists": False, "is_verified": False}
+
+@app.post("/api/auth/send-verification")
+def send_verification(req: SendVerificationRequest, db: Session = Depends(get_db)):
+    """
+    Generates a secure 6-digit OTP and verification token (SHA-256 hashed).
+    If SMTP is configured, sends a verification email.
+    If already registered and verified, prevents duplicate registration.
+    """
+    clean_email = req.email.lower().strip()
+    if not clean_email or "@" not in clean_email:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    # Prevent duplicate registration if account exists and is already verified
+    existing_user = db.query(DBUser).filter(DBUser.email == clean_email).first()
+    if existing_user and existing_user.is_verified:
+        raise HTTPException(
+            status_code=400,
+            detail="An account with this email address is already registered and verified. Please sign in or use 'Forgot password'."
+        )
+
+    # Save registration details to DBUser if not present (Requirement 1)
+    if not existing_user:
+        new_user = DBUser(
+            id=f"usr_{int(time.time())}_{secrets.token_hex(4)}",
+            firebase_uid=req.uid,
+            name=req.name or clean_email.split("@")[0].capitalize(),
+            email=clean_email,
+            auth_provider="password",
+            is_verified=False,
+            role="Cardiology Researcher",
+            institution="Nexus Heart Institute"
+        )
+        db.add(new_user)
+        db.commit()
+    elif req.uid and not existing_user.firebase_uid:
+        existing_user.firebase_uid = req.uid
+        if req.name and (existing_user.name == "Not Set" or not existing_user.name):
+            existing_user.name = req.name
+        db.commit()
+
+    # Cooldown check: prevent email spamming (allow 1 email per 45 seconds)
+    recent_req = db.query(DBEmailVerification).filter(
+        DBEmailVerification.email == clean_email,
+        DBEmailVerification.created_at >= datetime.now(timezone.utc) - timedelta(seconds=45)
+    ).first()
+    if recent_req:
+        raise HTTPException(
+            status_code=429,
+            detail="A verification email was recently sent. Please wait 45 seconds before requesting another code."
+        )
+
+    # Generate 6-digit cryptographic OTP and 32-byte secure token
+    raw_otp = f"{secrets.randbelow(900000) + 100000}"
+    raw_token = secrets.token_urlsafe(32)
+
+    # Store SHA-256 hashes (never plaintext)
+    otp_hash = hash_otp(clean_email, raw_otp)
+    token_hash = hash_token(raw_token)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+
+    verification_record = DBEmailVerification(
+        id=f"ver_{int(time.time())}_{secrets.token_hex(4)}",
+        email=clean_email,
+        token_hash=token_hash,
+        otp_hash=otp_hash,
+        expires_at=expires_at,
+        is_used=False,
+        attempts=0,
+        created_at=datetime.now(timezone.utc)
+    )
+    db.add(verification_record)
+    db.commit()
+
+    # Attempt SMTP delivery if configured
+    if email_service.is_smtp_configured():
+        sent_ok, msg = email_service.send_verification_email(
+            to_email=clean_email,
+            name=req.name or "Healthcare Researcher",
+            otp_code=raw_otp,
+            token=raw_token
+        )
+        if not sent_ok:
+            # Strictly: Do not claim that an email was sent unless the email sending process succeeds.
+            raise HTTPException(
+                status_code=500,
+                detail=f"Email delivery failed via SMTP: {msg}"
+            )
+        return {
+            "success": True,
+            "method": "smtp",
+            "message": f"Verification email with 6-digit code sent to {clean_email}."
+        }
+    else:
+        # SMTP not configured in backend: report so frontend can use Firebase verification
+        return {
+            "success": False,
+            "method": "firebase_fallback",
+            "message": "Backend SMTP is not configured. Falling back to Firebase email verification."
+        }
+
+@app.post("/api/auth/verify-otp")
+def verify_otp(req: VerifyOtpRequest, db: Session = Depends(get_db)):
+    """Verifies a 6-digit OTP code against the SHA-256 hash in email_verifications."""
+    clean_email = req.email.lower().strip()
+    clean_otp = req.otp.strip()
+
+    if not clean_email or not clean_otp:
+        raise HTTPException(status_code=400, detail="Email and 6-digit OTP code are required.")
+
+    computed_hash = hash_otp(clean_email, clean_otp)
+    now = datetime.now(timezone.utc)
+
+    # Find the most recent active verification record
+    record = db.query(DBEmailVerification).filter(
+        DBEmailVerification.email == clean_email,
+        DBEmailVerification.is_used == False
+    ).order_by(DBEmailVerification.created_at.desc()).first()
+
+    if not record:
+        raise HTTPException(status_code=400, detail="No active verification code found for this email. Please request a new code.")
+
+    if record.expires_at.tzinfo is None:
+        rec_expiry = record.expires_at.replace(tzinfo=timezone.utc)
+    else:
+        rec_expiry = record.expires_at
+
+    if now > rec_expiry:
+        raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new code.")
+
+    if record.attempts >= 5:
+        record.is_used = True
+        db.commit()
+        raise HTTPException(status_code=400, detail="Too many invalid attempts. For security, please request a new verification code.")
+
+    if record.otp_hash != computed_hash:
+        record.attempts += 1
+        db.commit()
+        remaining = max(0, 5 - record.attempts)
+        raise HTTPException(status_code=400, detail=f"Incorrect 6-digit verification code. ({remaining} attempts remaining)")
+
+    # OTP is correct! Mark record as used
+    record.is_used = True
+
+    # Update DBUser if exists
+    user = db.query(DBUser).filter(DBUser.email == clean_email).first()
+    if user:
+        user.is_verified = True
+    else:
+        # Create user record in DB with is_verified = True
+        user = DBUser(
+            id=f"usr_{int(time.time())}_{secrets.token_hex(4)}",
+            name=clean_email.split("@")[0].capitalize(),
+            email=clean_email,
+            auth_provider="password",
+            is_verified=True,
+            role="Not Set",
+            institution="Not Set"
+        )
+        db.add(user)
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Email {clean_email} successfully verified! Your account is now active.",
+        "email": clean_email,
+        "is_verified": True
+    }
+
+@app.get("/api/auth/verify-link")
+def verify_link(token: str, email: str, db: Session = Depends(get_db)):
+    """Verifies a direct link verification token and redirects or returns confirmation."""
+    clean_email = email.lower().strip()
+    computed_hash = hash_token(token)
+    now = datetime.now(timezone.utc)
+
+    record = db.query(DBEmailVerification).filter(
+        DBEmailVerification.email == clean_email,
+        DBEmailVerification.token_hash == computed_hash,
+        DBEmailVerification.is_used == False
+    ).first()
+
+    if not record:
+        return Response(
+            content="<html><body style='font-family:sans-serif;text-align:center;padding:50px;'>"
+                    "<h2 style='color:#b91c1c;'>Invalid or Expired Verification Link</h2>"
+                    "<p>This email verification link is invalid or has already been used.</p>"
+                    "<a href='/' style='color:#0284c7;'>Return to Cardiac Nexus</a>"
+                    "</body></html>",
+            media_type="text/html",
+            status_code=400
+        )
+
+    if record.expires_at.tzinfo is None:
+        rec_expiry = record.expires_at.replace(tzinfo=timezone.utc)
+    else:
+        rec_expiry = record.expires_at
+
+    if now > rec_expiry:
+        return Response(
+            content="<html><body style='font-family:sans-serif;text-align:center;padding:50px;'>"
+                    "<h2 style='color:#b91c1c;'>Verification Link Expired</h2>"
+                    "<p>This link expired after 15 minutes. Please request a new verification code.</p>"
+                    "<a href='/' style='color:#0284c7;'>Return to Cardiac Nexus</a>"
+                    "</body></html>",
+            media_type="text/html",
+            status_code=400
+        )
+
+    record.is_used = True
+    user = db.query(DBUser).filter(DBUser.email == clean_email).first()
+    if user:
+        user.is_verified = True
+    else:
+        user = DBUser(
+            id=f"usr_{int(time.time())}_{secrets.token_hex(4)}",
+            name=clean_email.split("@")[0].capitalize(),
+            email=clean_email,
+            auth_provider="password",
+            is_verified=True,
+            role="Not Set",
+            institution="Not Set"
+        )
+        db.add(user)
+    db.commit()
+
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    return Response(
+        content=f"<html><head><meta http-equiv='refresh' content='2;url={frontend_url}/?verified=true&email={clean_email}'></head>"
+                f"<body style='font-family:sans-serif;text-align:center;padding:50px;'>"
+                f"<h2 style='color:#15803d;'>Email Verified Successfully!</h2>"
+                f"<p>Your email <strong>{clean_email}</strong> has been verified. Redirecting to Cardiac Nexus...</p>"
+                f"<p><a href='{frontend_url}/?verified=true&email={clean_email}' style='color:#0284c7;'>Click here if not redirected automatically</a></p>"
+                f"</body></html>",
+        media_type="text/html"
+    )
+
+@app.post("/api/auth/resend-verification")
+def resend_verification(req: SendVerificationRequest, db: Session = Depends(get_db)):
+    """Resends a verification email or OTP for an unverified account."""
+    return send_verification(req, db)
+
 @app.post("/api/auth/sync")
 async def sync_user(req: FirebaseSyncRequest, response: Response, db: Session = Depends(get_db)):
     """Receives Firebase ID token, verifies token, syncs user profile to PostgreSQL DB."""
     firebase_data = verify_firebase_id_token(req.idToken)
+    clean_email = firebase_data["email"].lower().strip()
     
     user = db.query(DBUser).filter(
-        (DBUser.firebase_uid == firebase_data["uid"]) | (DBUser.email == firebase_data["email"])
+        (DBUser.firebase_uid == firebase_data["uid"]) | (DBUser.email == clean_email)
     ).first()
+
+    # Determine verification status
+    is_google = firebase_data.get("provider") in ("google.com", "google")
+    token_verified = firebase_data.get("email_verified", False)
+    db_verified = user.is_verified if user else False
+    is_verified = is_google or token_verified or db_verified
+
+    # Unverified password accounts must not receive active sync session
+    if not is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "Email address is not verified. Please verify your email before continuing.",
+                "code": "EMAIL_NOT_VERIFIED",
+                "email": clean_email,
+                "is_verified": False
+            }
+        )
 
     if not user:
         user = DBUser(
-            id=f"usr_{int(time.time())}",
+            id=f"usr_{int(time.time())}_{secrets.token_hex(4)}",
             firebase_uid=firebase_data["uid"],
             name=firebase_data["name"],
-            email=firebase_data["email"],
+            email=clean_email,
             auth_provider=firebase_data["provider"],
+            is_verified=True,
             role="Not Set",
             institution="Not Set"
         )
         db.add(user)
     else:
         user.firebase_uid = firebase_data["uid"]
+        user.is_verified = True
         user.last_login = datetime.now(timezone.utc)
 
     db.commit()
@@ -327,7 +698,8 @@ async def sync_user(req: FirebaseSyncRequest, response: Response, db: Session = 
             "email": user.email,
             "role": user.role or "Not Set",
             "institution": user.institution or "Not Set",
-            "auth_provider": user.auth_provider
+            "auth_provider": user.auth_provider,
+            "is_verified": user.is_verified
         }
     }
 
