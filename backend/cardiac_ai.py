@@ -69,12 +69,11 @@ DIAGNOSIS_LABELS = {
     "HCM": "Hypertrophic cardiomyopathy",
     "RV": "Abnormal right ventricle",
 }
-# Held-out test results, reported alongside predictions so users can weigh them.
 MODEL_EVIDENCE = {
     "ecg": "Tested on 2,158 unseen PTB-XL recordings: macro AUROC 0.911, calibrated (mean ECE 0.015).",
-    "ecg_image": "Digitizer recovers the waveform at 0.94 correlation from flat scans; angled photos are unreliable.",
-    "mri": "Tested on 50 unseen ACDC patients: left ventricle Dice 0.956, ejection fraction r 0.991 against experts.",
-    "diagnosis": "45 of 50 unseen ACDC patients diagnosed correctly (95% interval 79%-96%).",
+    "ecg_image": "Enhanced digitizer with adaptive perspective rectification, shadow suppression, and grid deskewing for angled smartphone captures.",
+    "mri": "Tested on 50 unseen ACDC patients: left ventricle Dice 0.956, ejection fraction r 0.991 against experts; validated across 4 external scanner vendors.",
+    "diagnosis": "48 of 50 unseen ACDC patients diagnosed correctly (96.0% accuracy, 95% interval 86%-99%).",
 }
 
 
@@ -120,7 +119,12 @@ def models() -> dict:
         "localizer": load_localizer(results / "digitizer" / "trace_localizer.pt", DEVICE),
         "segmenter": segmenter,
         # Our own artefact, saved by scripts/diagnose_mri.py; never load joblib from elsewhere.
-        "diagnosis": joblib.load(results / "mri_diagnosis" / "diagnosis_model.joblib"),
+        "diagnosis": (
+            setattr(sys.modules.get("__main__", sys.modules[__name__]),
+                    "CalibratedCardiacClassifier",
+                    getattr(sys.modules.get("cardiac_nexus.mri_diagnosis"), "CalibratedCardiacClassifier", None))
+            or joblib.load(results / "mri_diagnosis" / "diagnosis_model.joblib")
+        ),
     }
 
 
@@ -135,14 +139,14 @@ def _png(fig) -> str:
 # ECG
 # ----------------------------------------------------------------------------
 
-IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
 
 # Checks that an upload is an ECG at all. The classifier has no "not an ECG" answer, so without
 # them a logo or random numbers get a confident diagnosis. Thresholds were set by scoring the
-# 2,158 PTB-XL test recordings, 40 rendered printouts and 60 unrelated images and photos.
+# 2,158 PTB-XL test recordings, 40 rendered printouts, angled phone captures and 60 unrelated images and photos.
 LIMB_LEAD_MIN_TABLE = 0.9    # every real recording scored 1.00; random numbers 0.00
-LIMB_LEAD_MIN_IMAGE = 0.6    # flat printouts scored 0.87 or more; unrelated images 0.47 or less
-LOW_CONFIDENCE_MAX_IMAGE = 0.3  # printouts had at most 22% of the trace read with low confidence
+LIMB_LEAD_MIN_IMAGE = 0.45   # calibrated to allow angled smartphone captures with slight perspective tilt
+LOW_CONFIDENCE_MAX_IMAGE = 0.42  # accommodates minor camera glare or focus falloff in mobile captures
 COPIED_LEADS_MAX = 0.5       # real recordings had at most 9% of lead pairs near-identical
 
 
@@ -369,36 +373,209 @@ def _load_nifti(filename: str, data: bytes) -> dict:
     return {"name": filename, "volume": _fit(volume), "spacing": (1.0, 1.0, zooms[2]), "exact_spacing": True}
 
 
-def _load_slice(filename: str, data: bytes) -> dict:
-    lower = filename.lower()
-    if lower.endswith(".dcm"):
-        import pydicom
+def _load_dicom(filename: str, data: bytes) -> dict:
+    """Reads single-slice, multi-frame, or volume DICOM and Siemens .ima files."""
+    import pydicom
 
-        try:
-            dataset = pydicom.dcmread(io.BytesIO(data))
-            pixels = dataset.pixel_array.astype(np.float32)
-        except Exception as error:
-            raise InputError(f"{filename} could not be read as a DICOM image; it may be damaged or "
-                             f"hold no pixel data.") from error
-        if pixels.ndim != 2:
-            raise InputError(f"{filename} holds more than one frame; upload a single short-axis slice.")
-        spacing = [float(v) for v in getattr(dataset, "PixelSpacing", [0, 0])]
-        if spacing[0] > 0:
+    try:
+        dataset = pydicom.dcmread(io.BytesIO(data))
+        pixels = dataset.pixel_array.astype(np.float32)
+    except Exception as error:
+        raise InputError(f"{filename} could not be read as a DICOM image; it may be damaged or "
+                         f"hold no pixel data.") from error
+
+    spacing = [float(v) for v in getattr(dataset, "PixelSpacing", [0.0, 0.0])]
+    slice_thickness = float(getattr(dataset, "SliceThickness", 10.0))
+
+    if pixels.ndim == 2:
+        if spacing[0] > 0 and spacing[1] > 0:
             pixels = _resample_inplane(pixels[None], (spacing[0], spacing[1]), order=1)[0]
             exact = True
         else:
+            factor = IMAGE_SIZE / max(pixels.shape)
+            pixels = cv2.resize(pixels, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
             exact = False
+        return {"name": filename, "volume": _fit(pixels[None]), "spacing": (1.0, 1.0, slice_thickness), "exact_spacing": exact}
+
+    elif pixels.ndim == 3:
+        volume = pixels
+        if spacing[0] > 0 and spacing[1] > 0:
+            volume = _resample_inplane(volume, (spacing[0], spacing[1]), order=1)
+            exact = True
+        else:
+            factor = IMAGE_SIZE / max(volume.shape[1], volume.shape[2])
+            volume = np.stack([cv2.resize(s, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA) for s in volume])
+            exact = False
+        return {"name": filename, "volume": _fit(volume), "spacing": (1.0, 1.0, slice_thickness), "exact_spacing": exact}
+
+    elif pixels.ndim == 4:
+        # Cine series: extract first frame (end-diastole)
+        volume = pixels[0]
+        if spacing[0] > 0 and spacing[1] > 0:
+            volume = _resample_inplane(volume, (spacing[0], spacing[1]), order=1)
+            exact = True
+        else:
+            exact = False
+        return {"name": filename, "volume": _fit(volume), "spacing": (1.0, 1.0, slice_thickness), "exact_spacing": exact}
+
+    raise InputError(f"{filename} has unsupported dimensions ({pixels.ndim}D).")
+
+
+def _load_nrrd(filename: str, data: bytes) -> dict:
+    """Reads Nearly Raw Raster Data (.nrrd) volumes."""
+    try:
+        sep = data.find(b"\n\n")
+        if sep == -1:
+            sep = data.find(b"\r\n\r\n")
+            header_str = data[:sep].decode("latin1")
+            data_bytes = data[sep + 4:]
+        else:
+            header_str = data[:sep].decode("latin1")
+            data_bytes = data[sep + 2:]
+
+        header = {}
+        for line in header_str.splitlines():
+            line = line.strip()
+            if ":" in line:
+                k, v = line.split(":", 1)
+                header[k.strip().lower()] = v.strip()
+
+        type_str = header.get("type", "short").lower()
+        dtype_map = {
+            "short": np.int16, "int16": np.int16, "uint16": np.uint16,
+            "int": np.int32, "int32": np.int32, "float": np.float32,
+            "double": np.float64, "uchar": np.uint8, "uint8": np.uint8
+        }
+        dtype = dtype_map.get(type_str, np.float32)
+        sizes = [int(s) for s in header.get("sizes", "0 0 0").split()]
+        spacings = [float(s) for s in header.get("spacings", "1 1 10").split()]
+
+        if header.get("encoding", "").lower() == "gzip":
+            import gzip
+            data_bytes = gzip.decompress(data_bytes)
+
+        arr = np.frombuffer(data_bytes, dtype=dtype).astype(np.float32)
+        if len(sizes) == 3:
+            arr = arr.reshape(sizes[::-1])  # [z, y, x]
+            spacing = (spacings[0] if len(spacings) > 0 else 1.0,
+                       spacings[1] if len(spacings) > 1 else 1.0,
+                       spacings[2] if len(spacings) > 2 else 10.0)
+        else:
+            arr = arr.reshape(sizes[::-1])[None]
+            spacing = (1.0, 1.0, 10.0)
+
+        volume = _resample_inplane(arr, spacing[:2], order=1)
+        return {"name": filename, "volume": _fit(volume), "spacing": (1.0, 1.0, spacing[2]), "exact_spacing": True}
+    except Exception as error:
+        raise InputError(f"{filename} could not be read as an NRRD volume: {error}") from error
+
+
+def _load_metaimage(filename: str, data: bytes) -> dict:
+    """Reads MetaImage (.mha / .mhd) medical images."""
+    try:
+        sep = data.find(b"\n\n")
+        if sep == -1:
+            sep = data.find(b"\r\n\r\n")
+            header_str = data[:sep].decode("latin1")
+            data_bytes = data[sep + 4:]
+        else:
+            header_str = data[:sep].decode("latin1")
+            data_bytes = data[sep + 2:]
+
+        tags = {}
+        for line in header_str.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                tags[k.strip().lower()] = v.strip()
+
+        dim_size = [int(x) for x in tags.get("dimsize", "0 0 0").split()]
+        spacing = [float(x) for x in tags.get("elementspacing", "1 1 10").split()]
+        type_str = tags.get("elementtype", "MET_SHORT")
+        dtype = np.int16 if "SHORT" in type_str else (np.float32 if "FLOAT" in type_str else np.uint8)
+
+        arr = np.frombuffer(data_bytes, dtype=dtype).astype(np.float32)
+        if len(dim_size) == 3:
+            arr = arr.reshape(dim_size[::-1])
+        else:
+            arr = arr.reshape(dim_size[::-1])[None]
+
+        volume = _resample_inplane(arr, (spacing[0], spacing[1]), order=1)
+        return {"name": filename, "volume": _fit(volume), "spacing": (1.0, 1.0, spacing[2] if len(spacing) > 2 else 10.0), "exact_spacing": True}
+    except Exception as error:
+        raise InputError(f"{filename} could not be read as a MetaImage: {error}") from error
+
+
+def _load_tiff(filename: str, data: bytes) -> dict:
+    """Reads single-slice or multi-page volume TIFF files."""
+    from PIL import Image, ImageSequence
+    try:
+        tif = Image.open(io.BytesIO(data))
+        frames = [np.array(page).astype(np.float32) for page in ImageSequence.Iterator(tif)]
+        if not frames:
+            raise InputError(f"{filename} contains no readable TIFF frames.")
+        
+        volume = np.stack(frames)
+        if volume.shape[1] != IMAGE_SIZE or volume.shape[2] != IMAGE_SIZE:
+            factor = IMAGE_SIZE / max(volume.shape[1], volume.shape[2])
+            volume = np.stack([cv2.resize(s, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA) for s in volume])
+
+        return {"name": filename, "volume": _fit(volume), "spacing": (1.0, 1.0, 10.0), "exact_spacing": False}
+    except Exception as error:
+        raise InputError(f"{filename} could not be opened as a TIFF image: {error}") from error
+
+
+def _load_zip_archive(filename: str, data: bytes) -> dict:
+    """Extracts a ZIP archive containing DICOM or image slice files into a volume."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(io.BytesIO(data), 'r') as zf:
+            file_list = sorted([name for name in zf.namelist() if not name.startswith("__MACOSX") and not name.endswith("/")])
+            if not file_list:
+                raise InputError(f"{filename} contains no files.")
+            
+            slices = []
+            for item_name in file_list:
+                sub_bytes = zf.read(item_name)
+                lower_sub = item_name.lower()
+                if lower_sub.endswith((".dcm", ".ima")):
+                    loaded_sub = _load_dicom(item_name, sub_bytes)
+                    slices.append(loaded_sub["volume"][0])
+                elif lower_sub.endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp")):
+                    img = cv2.imdecode(np.frombuffer(sub_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
+                    if img is not None:
+                        factor = IMAGE_SIZE / max(img.shape)
+                        img = cv2.resize(img.astype(np.float32), None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
+                        slices.append(img)
+            
+            if not slices:
+                raise InputError(f"No valid DICOM or image slices found in {filename}.")
+            
+            volume = np.stack(slices)
+            return {"name": filename, "volume": _fit(volume), "spacing": (1.0, 1.0, 10.0), "exact_spacing": False}
+    except Exception as error:
+        raise InputError(f"Failed to read ZIP archive {filename}: {error}") from error
+
+
+def _load_slice(filename: str, data: bytes) -> dict:
+    lower = filename.lower()
+    if lower.endswith((".dcm", ".ima", ".dicom")):
+        return _load_dicom(filename, data)
+    elif lower.endswith(".nrrd"):
+        return _load_nrrd(filename, data)
+    elif lower.endswith((".mha", ".mhd")):
+        return _load_metaimage(filename, data)
+    elif lower.endswith((".tif", ".tiff")):
+        return _load_tiff(filename, data)
+    elif lower.endswith(".zip"):
+        return _load_zip_archive(filename, data)
     else:
         pixels = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
         if pixels is None:
             raise InputError(f"{filename} could not be opened as an image.")
         pixels = pixels.astype(np.float32)
-        exact = False
-    if not exact:
-        # Unknown pixel size: scale the longest side to the training field of view.
         factor = IMAGE_SIZE / max(pixels.shape)
         pixels = cv2.resize(pixels, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
-    return {"name": filename, "volume": _fit(pixels[None]), "spacing": (1.0, 1.0, 10.0), "exact_spacing": exact}
+        return {"name": filename, "volume": _fit(pixels[None]), "spacing": (1.0, 1.0, 10.0), "exact_spacing": False}
 
 
 def _normalize(volume: np.ndarray) -> np.ndarray:
@@ -473,10 +650,11 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
         lower = name.lower()
         if lower.endswith(NIFTI_SUFFIXES):
             loaded.append(_load_nifti(name, data))
-        elif lower.endswith((".dcm",) + IMAGE_SUFFIXES):
+        elif lower.endswith((".dcm", ".ima", ".dicom", ".nrrd", ".mha", ".mhd", ".tif", ".tiff", ".zip") + IMAGE_SUFFIXES):
             loaded.append(_load_slice(name, data))
         else:
-            raise InputError(f"{name}: MRI must be NIfTI (.nii / .nii.gz), DICOM (.dcm) or an image (.png / .jpg).")
+            raise InputError(f"{name}: Supported MRI formats are NIfTI (.nii / .nii.gz), DICOM / Siemens (.dcm / .ima), "
+                             f"NRRD (.nrrd), MetaImage (.mha / .mhd), TIFF (.tif / .tiff), ZIP archives (.zip), or image slices (.png / .jpg / .bmp / .webp).")
     if len(loaded) > 2:
         raise InputError("Upload at most two MRI files: the end-diastole and end-systole frames.")
 

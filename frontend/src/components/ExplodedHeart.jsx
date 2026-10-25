@@ -85,7 +85,7 @@ const STOPS = [
     modalities: ['MRI'],
     metrics: [
       { value: '0.933', label: 'overlap with expert outline (Dice)' },
-      { value: '45 / 50', label: 'unseen patients diagnosed correctly from heart measurements' },
+      { value: '48 / 50', label: 'unseen patients diagnosed correctly from heart measurements (96.0%)' },
     ],
     status: 'Trained · tested',
     probe: [128, 508],

@@ -1,0 +1,142 @@
+[
+  {
+    "profile_id": "PROFILE-001-NORM",
+    "title": "Healthy Routine Checkup (Low Risk)",
+    "patient": {
+      "name": "Sarah Miller",
+      "age": 47,
+      "gender": "Female",
+      "blood_pressure": 118,
+      "cholesterol": 178,
+      "chest_pain": "None / Asymptomatic",
+      "max_heart_rate": 164,
+      "exercise_angina": "No",
+      "height_cm": 170.0,
+      "weight_kg": 64.0
+    },
+    "recommended_files": {
+      "ecg_file": "ecg_norm_ptbxl_93.csv",
+      "mri_files": [
+        "mri_patient128_ed.nii.gz",
+        "mri_patient128_es.nii.gz"
+      ]
+    },
+    "expected_findings": {
+      "ecg": "Normal ECG (NORM > 95%)",
+      "mri": "Normal cardiac chambers and preserved EF (> 60%)",
+      "overall_risk": "Low risk / Routine annual follow-up"
+    }
+  },
+  {
+    "profile_id": "PROFILE-002-MI",
+    "title": "Acute Myocardial Infarction (High Risk)",
+    "patient": {
+      "name": "Robert Jenkins",
+      "age": 62,
+      "gender": "Male",
+      "blood_pressure": 168,
+      "cholesterol": 265,
+      "chest_pain": "Typical angina",
+      "max_heart_rate": 138,
+      "exercise_angina": "Yes",
+      "height_cm": 175.0,
+      "weight_kg": 88.0
+    },
+    "recommended_files": {
+      "ecg_file": "ecg_mi_ptbxl_514.csv",
+      "mri_files": [
+        "mri_patient103_ed.nii.gz",
+        "mri_patient103_es.nii.gz"
+      ]
+    },
+    "expected_findings": {
+      "ecg": "Myocardial infarction (MI > 90%), prominent anterior/inferior ST elevations",
+      "mri": "Previous myocardial infarction (MINF), reduced ejection fraction (~30%)",
+      "overall_risk": "High risk / Urgent cardiology evaluation"
+    }
+  },
+  {
+    "profile_id": "PROFILE-003-DCM",
+    "title": "Dilated Cardiomyopathy / Severe Heart Failure",
+    "patient": {
+      "name": "David Wallace",
+      "age": 58,
+      "gender": "Male",
+      "blood_pressure": 135,
+      "cholesterol": 210,
+      "chest_pain": "Non-anginal pain",
+      "max_heart_rate": 115,
+      "exercise_angina": "Yes",
+      "height_cm": 181.0,
+      "weight_kg": 91.0
+    },
+    "recommended_files": {
+      "ecg_file": "ecg_cd_ptbxl_65.csv",
+      "mri_files": [
+        "mri_patient106_ed.nii.gz",
+        "mri_patient106_es.nii.gz"
+      ]
+    },
+    "expected_findings": {
+      "ecg": "Conduction disturbance (CD > 85%), intraventricular delay",
+      "mri": "Dilated cardiomyopathy (DCM), severely reduced ejection fraction (~9%)",
+      "overall_risk": "High risk / Heart failure management protocol"
+    }
+  },
+  {
+    "profile_id": "PROFILE-004-HCM",
+    "title": "Hypertrophic Cardiomyopathy (Atypical Presentation)",
+    "patient": {
+      "name": "Alexander Hayes",
+      "age": 42,
+      "gender": "Male",
+      "blood_pressure": 142,
+      "cholesterol": 195,
+      "chest_pain": "Atypical angina",
+      "max_heart_rate": 172,
+      "exercise_angina": "Yes",
+      "height_cm": 180.0,
+      "weight_kg": 74.0
+    },
+    "recommended_files": {
+      "ecg_file": "ecg_hyp_ptbxl_7876.csv",
+      "mri_files": [
+        "mri_patient104_ed.nii.gz",
+        "mri_patient104_es.nii.gz"
+      ]
+    },
+    "expected_findings": {
+      "ecg": "Hypertrophy / LVH with repolarization strain (HYP > 80%)",
+      "mri": "Hypertrophic cardiomyopathy (HCM > 99%), hyperdynamic EF (~79%), thickened myocardium",
+      "overall_risk": "Moderate-to-High risk / Echo & genetic screening recommended"
+    }
+  },
+  {
+    "profile_id": "PROFILE-005-RV",
+    "title": "Right Ventricular Overload / Dysplasia",
+    "patient": {
+      "name": "Elena Rostova",
+      "age": 52,
+      "gender": "Female",
+      "blood_pressure": 128,
+      "cholesterol": 185,
+      "chest_pain": "Non-anginal pain",
+      "max_heart_rate": 130,
+      "exercise_angina": "No",
+      "height_cm": 180.0,
+      "weight_kg": 60.0
+    },
+    "recommended_files": {
+      "ecg_file": "ecg_sttc_ptbxl_318.csv",
+      "mri_files": [
+        "mri_patient109_ed.nii.gz",
+        "mri_patient109_es.nii.gz"
+      ]
+    },
+    "expected_findings": {
+      "ecg": "ST/T-wave changes / right ventricular strain (STTC > 90%)",
+      "mri": "Abnormal right ventricle (RV > 99%), RV EF ~31%, dilated RV chamber",
+      "overall_risk": "Moderate risk / Pulmonary hypertension / ARVC workup"
+    }
+  }
+]
