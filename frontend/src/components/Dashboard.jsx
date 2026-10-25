@@ -6,6 +6,7 @@ import {
 import { auth } from '../firebase';
 import { sendEmailVerification, updateProfile } from 'firebase/auth';
 import { ResultsView, ReportView, HistoryView } from './AnalysisResults';
+import HeartCameraWellness from './HeartCameraWellness';
 
 function Badge({ children, tone = 'blue' }) {
   return <span className={`badge ${tone}`}>{children}</span>;
@@ -121,7 +122,7 @@ export function Dashboard({ user, token, onLogout, onUserUpdate }) {
           {page === 'Results' && <ResultsView result={result} setPage={setPage} />}
           {page === 'History' && <HistoryView token={token} setResult={setResult} setPage={setPage} />}
           {page === 'Reports' && <ReportView result={result} />}
-          {page === 'Wellness Check' && <WellnessCheckPage token={token} setPage={setPage} />}
+          {page === 'Wellness Check' && <HeartCameraWellness token={token} setPage={setPage} />}
           {page === 'Patients' && <PatientsPage token={token} setPage={setPage} onSelectForAnalysis={(p) => { setSelectedPatientForAnalysis(p); setPage('New Analysis'); }} />}
           {page === 'Technology' && <TechnologyPage />}
           {page === 'Research' && <ResearchPage />}

@@ -88,6 +88,11 @@ class DBWellnessScreening(Base):
     stress_level = Column(String, nullable=False)
     confidence = Column(Float, default=0.95)
     guidance_notes = Column(Text, nullable=True)
+    fatigue_level = Column(String, nullable=True)
+    sleepiness_level = Column(String, nullable=True)
+    facial_expression = Column(String, nullable=True)
+    signal_quality = Column(String, nullable=True)
+    details_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -189,6 +194,11 @@ class WellnessScreeningCreateRequest(BaseModel):
     stress_level: str
     confidence: Optional[float] = 0.95
     guidance_notes: Optional[str] = None
+    fatigue_level: Optional[str] = "Alert & Attentive"
+    sleepiness_level: Optional[str] = "Awake"
+    facial_expression: Optional[str] = "Neutral"
+    signal_quality: Optional[str] = "Good (78%)"
+    details_json: Optional[str] = None
 
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 _google_request = google.auth.transport.requests.Request()
@@ -819,6 +829,11 @@ def log_wellness_screening(
         stress_level=req.stress_level,
         confidence=req.confidence or 0.95,
         guidance_notes=req.guidance_notes,
+        fatigue_level=req.fatigue_level,
+        sleepiness_level=req.sleepiness_level,
+        facial_expression=req.facial_expression,
+        signal_quality=req.signal_quality,
+        details_json=req.details_json,
         created_at=datetime.now(timezone.utc),
     )
     db.add(screening)
@@ -849,10 +864,31 @@ def list_wellness_screenings(
             "stress_level": r.stress_level,
             "confidence": r.confidence,
             "guidance_notes": r.guidance_notes,
+            "fatigue_level": r.fatigue_level or "Alert & Attentive",
+            "sleepiness_level": r.sleepiness_level or "Awake",
+            "facial_expression": r.facial_expression or "Neutral",
+            "signal_quality": r.signal_quality or "Good (78%)",
+            "details_json": r.details_json,
             "created_at": r.created_at.isoformat() if r.created_at else None
         }
         for r in rows
     ]
+
+
+@app.post("/api/wellness/report.pdf")
+def wellness_report_pdf(req: dict):
+    """Renders a Cardiac Wellness biometric screening into an A4 PDF document."""
+    import report_pdf as report
+    try:
+        pdf = report.build_wellness_report_pdf(req)
+    except Exception as error:
+        raise HTTPException(status_code=422, detail=f"Could not build the wellness report: {error}")
+    filename = f"cardiac-wellness-report-{str(req.get('id') or req.get('screening_id') or 'screening')}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 
 # ============================================================================
