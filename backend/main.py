@@ -817,7 +817,24 @@ def log_wellness_screening(
     user: Optional[DBUser] = Depends(get_optional_user),
     db: Session = Depends(get_db)
 ):
-    """Logs a contactless camera-based photoplethysmography screening."""
+    """Logs a contactless camera-based photoplethysmography screening with strict validation."""
+    if req.heart_rate_bpm is None or req.heart_rate_bpm < 40 or req.heart_rate_bpm > 220:
+        raise HTTPException(
+            status_code=422,
+            detail="Camera analysis validation failed: Estimated heart rate is outside physiological range or invalid."
+        )
+    if req.confidence is not None and req.confidence < 0.35:
+        raise HTTPException(
+            status_code=422,
+            detail="Camera analysis validation failed: Signal confidence is insufficient for clinical logging."
+        )
+    quality = (req.signal_quality or "").lower()
+    if "insufficient" in quality or "no face" in quality or "failed" in quality:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot record screening: Camera data was flagged with insufficient signal quality or no face detected."
+        )
+
     screening_id = f"WLN-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{secrets.token_hex(2).upper()}"
     screening = DBWellnessScreening(
         id=screening_id,
@@ -877,7 +894,14 @@ def list_wellness_screenings(
 
 @app.post("/api/wellness/report.pdf")
 def wellness_report_pdf(req: dict):
-    """Renders a Cardiac Wellness biometric screening into an A4 PDF document."""
+    """Renders a Cardiac Wellness biometric screening into an A4 PDF document with validation."""
+    hr = req.get("heart_rate_bpm") or req.get("heartRate")
+    if hr is None or float(hr) < 40 or float(hr) > 220:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot generate report: Camera analysis data is missing, invalid, or outside physiological range."
+        )
+
     import report_pdf as report
     try:
         pdf = report.build_wellness_report_pdf(req)
