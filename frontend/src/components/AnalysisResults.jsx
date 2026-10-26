@@ -69,6 +69,44 @@ function Evidence({ children }) {
   return children ? <p className="ar-evidence">{children}</p> : null;
 }
 
+// The combination is not precise enough to state 0% or 100%; the backend words it the same way.
+const fusionPct = p => (p > 0.99 ? '>99%' : p < 0.01 ? '<1%' : pct(p));
+
+function FusionResult({ fusion }) {
+  return (
+    <section className="ar-card ar-fusion">
+      <header>
+        <Activity size={20} />
+        <div>
+          <h2>Health record, ECG and MRI combined</h2>
+          <p>Probability of {fusion.target}</p>
+        </div>
+      </header>
+      <div className="ar-fusion-chain">
+        {fusion.steps.map((step, i) => (
+          <React.Fragment key={step.modality}>
+            {i > 0 && <ArrowRight size={18} className="ar-fusion-arrow" />}
+            <div className={`ar-fusion-step ${step.kind === 'not used' ? 'is-skipped' : ''}`}>
+              <small>{step.modality}</small>
+              <b>{fusionPct(step.probability)}</b>
+              <span>{step.kind === 'likelihood ratio' ? `× ${step.ratio.toPrecision(2)}` : step.kind}</span>
+            </div>
+          </React.Fragment>
+        ))}
+        <ArrowRight size={18} className="ar-fusion-arrow" />
+        <div className="ar-fusion-step is-final">
+          <small>Combined</small>
+          <b>{fusionPct(fusion.probability)}</b>
+          <span>all three</span>
+        </div>
+      </div>
+      <ul className="ar-because">{fusion.steps.map(s => <li key={s.modality}>{s.text}</li>)}</ul>
+      <p className="ar-method">{fusion.method}</p>
+      <ul className="ar-notes">{fusion.assumptions.map(a => <li key={a}>{a}</li>)}</ul>
+    </section>
+  );
+}
+
 export function ResultsView({ result, setPage }) {
   if (!result?.summary) {
     return <EmptyState setPage={setPage} title="Waiting for required inputs"
@@ -125,6 +163,8 @@ export function ResultsView({ result, setPage }) {
           )}
         </div>
       </section>
+
+      {summary.fusion && <FusionResult fusion={summary.fusion} />}
 
       <section className="ar-card">
         <header>
@@ -212,6 +252,20 @@ export function ResultsView({ result, setPage }) {
             <p>{clinical.method}</p>
           </div>
         </header>
+        {clinical.model && (
+          <div className="ar-ehr">
+            <h3>Probability of {clinical.model.outcome}</h3>
+            <div className="ar-ehr-value"><b>{fusionPct(clinical.model.probability)}</b><span>{clinical.model.population}</span></div>
+            {clinical.model.because.length > 0 && (
+              <>
+                <p className="ar-sub">What moved it most:</p>
+                <ul className="ar-because">{clinical.model.because.map(b => <li key={b}>{b}</li>)}</ul>
+              </>
+            )}
+            <Evidence>{clinical.model.evidence}</Evidence>
+          </div>
+        )}
+        <h3>Guideline checks</h3>
         <ul className="ar-flags">
           {clinical.flags.map(f => (
             <li key={f.item + f.text}>
@@ -242,6 +296,13 @@ export function buildReport(r) {
     `  Method: ${r.summary.method}`,
     ...(r.summary.combined || []).map(x => `  - [ECG+MRI] ${x.text}`),
     ...(r.summary.combined?.length ? [`  ECG+MRI method: ${r.summary.combined_method}`] : []),
+    ...(r.summary.fusion ? [
+      '',
+      `HEALTH RECORD, ECG AND MRI COMBINED: ${fusionPct(r.summary.fusion.probability)} (${r.summary.fusion.target})`,
+      ...r.summary.fusion.steps.map(s => `  - [${s.modality}] ${s.text}`),
+      `  Method: ${r.summary.fusion.method}`,
+      ...r.summary.fusion.assumptions.map(a => `  Assumption: ${a}`),
+    ] : []),
     '',
     'ECG',
     ...r.ecg.findings.map(f => `  ${f.label.padEnd(26)} ${pct(f.probability).padStart(5)}`),
@@ -262,6 +323,12 @@ export function buildReport(r) {
     `  ${r.mri.evidence}`,
     '',
     'CLINICAL VALUES',
+    ...(r.clinical.model ? [
+      `  Probability of ${r.clinical.model.outcome}: ${fusionPct(r.clinical.model.probability)}`,
+      ...r.clinical.model.because.map(b => `    - ${b}`),
+      `  ${r.clinical.model.population}`,
+      `  ${r.clinical.model.evidence}`,
+    ] : []),
     ...r.clinical.flags.map(f => `  ${f.item}: ${f.text}`),
     '',
     line,
@@ -409,9 +476,24 @@ export function ReportView({ result }) {
             <p className="rp-small">{summary.combined_method}</p>
           </>
         )}
+        {summary.fusion && (
+          <>
+            <h3>Health record, ECG and MRI combined: {fusionPct(summary.fusion.probability)}</h3>
+            <p className="rp-small">Probability of {summary.fusion.target}.</p>
+            <ul className="rp-list">{summary.fusion.steps.map(s => <li key={s.modality}>{s.text}</li>)}</ul>
+            <p className="rp-small">{summary.fusion.method} {summary.fusion.assumptions.join(' ')}</p>
+          </>
+        )}
 
         <h2>2. Clinical values</h2>
         <p className="rp-small">{clinical.method}</p>
+        {clinical.model && (
+          <>
+            <p><b>Probability of {clinical.model.outcome}: {fusionPct(clinical.model.probability)}</b></p>
+            <ul className="rp-list">{clinical.model.because.map(b => <li key={b}>{b}</li>)}</ul>
+            <p className="rp-small">{clinical.model.population} {clinical.model.evidence}</p>
+          </>
+        )}
         <table className="rp-table">
           <thead><tr><th>Item</th><th>Finding</th><th>Status</th></tr></thead>
           <tbody>

@@ -12,12 +12,15 @@ a model output.
               -> volumes and ejection fraction when both ED and ES are given
               -> diagnosis from measurements when height and weight are given
     Clinical  entered values checked against guideline reference ranges
+              -> probability of coronary artery disease from a model trained on
+                 920 angiography patients at four centres (UCI Heart Disease)
+    Fusion    the clinical probability updated by the ECG's and the MRI's
+              evidence of infarction (Bayes' rule, likelihood ratios)
 
-There is no trained fusion model yet: no public dataset pairs ECG, MRI and
-health records for the same patients. The summary therefore combines the three
-with explicit rules, and says so in its output. Where the ECG and MRI models name
-the same diagnosis, it also shows a likelihood-ratio update of the ECG probability
-by the MRI result, labelled with the untested independence assumption behind it.
+No public dataset pairs ECG, MRI and health records for the same patients, so the
+fusion cannot be trained or tested as one model. Each model is validated on its
+own data, the combination rule and its two untestable assumptions are shown with
+every result, and the attention level still comes from explicit thresholds.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 
+from cardiac_nexus import ehr as ehr_model  # noqa: E402
 from cardiac_nexus.data import LEAD_NAMES, SUPERCLASSES  # noqa: E402
 from cardiac_nexus.ecg_image.pipeline import digitize_page, load_localizer  # noqa: E402
 from cardiac_nexus.explain import attribute  # noqa: E402
@@ -131,6 +135,10 @@ def models() -> dict:
         # Written by nexus-ai-engine's scripts/fusion_likelihood_ratios.py; absent in older engine checkouts.
         "likelihood_ratios": (json.loads((results / "fusion" / "likelihood_ratios.json").read_text())
                               if (results / "fusion" / "likelihood_ratios.json").exists() else None),
+        # scripts/train_ehr.py and scripts/fusion_three_way.py; our own artefacts, like the diagnosis model.
+        "ehr": joblib.load(results / "ehr" / "ehr_model.joblib"),
+        "ehr_report": json.loads((results / "ehr" / "ehr_report.json").read_text()),
+        "three_way": json.loads((results / "fusion" / "three_way.json").read_text()),
     }
 
 
@@ -932,7 +940,40 @@ def assess_clinical(age: int, gender: str, blood_pressure: int | None, cholester
     return {
         "flags": flags,
         "method": "Checked against published guideline ranges (ACC/AHA 2017 blood pressure, NCEP ATP III "
-                  "cholesterol). This is not a trained model.",
+                  "cholesterol).",
+        "model": coronary_disease_probability(age, gender, blood_pressure, cholesterol, max_heart_rate,
+                                              chest_pain, exercise_angina),
+    }
+
+
+def _ehr_evidence(report: dict) -> str:
+    internal = report["internal_test"]
+    external = [e["auroc"] for e in report["leave_one_centre_out"].values() if e["auroc"] is not None]
+    return (f"Trained on {report['split']['train']} angiography patients from four centres; on "
+            f"{internal['patients']} unseen patients AUROC {internal['auroc']:.2f} "
+            f"(95% CI {internal['auroc_95ci'][0]:.2f}-{internal['auroc_95ci'][1]:.2f}); at a centre left out of "
+            f"training, AUROC {min(external):.2f}-{max(external):.2f}.")
+
+
+def coronary_disease_probability(age, gender, blood_pressure, cholesterol, max_heart_rate,
+                                 chest_pain, exercise_angina) -> dict:
+    """Probability of angiographic coronary artery disease from the entered findings.
+
+    A blank field is averaged over the values real training patients had, rather
+    than filled with one typical value the model would treat as a measurement.
+    """
+    bundle = models()["ehr"]
+    row = ehr_model.form_row(age, gender, blood_pressure, cholesterol, max_heart_rate, chest_pain, exercise_angina)
+    probability = ehr_model.predict(bundle["model"], row, bundle["reference"])
+    entered = [ehr_model.LABELS[f] for f in ehr_model.FEATURES if not pd.isna(row[f].iloc[0])]
+    return {
+        "outcome": "coronary artery disease (more than 50% narrowing of a major artery)",
+        "probability": round(probability, 4),
+        "because": ehr_model.explain(bundle["model"], row, bundle["reference"]),
+        "used": entered,
+        "population": ("Among patients referred for coronary angiography, as in the training data; in the "
+                       "general population the same findings mean a lower probability."),
+        "evidence": _ehr_evidence(models()["ehr_report"]),
     }
 
 
@@ -988,6 +1029,66 @@ def combine_ecg_mri(ecg: dict, mri: dict, ratios: dict | None) -> list[dict]:
     return combined
 
 
+def _odds(p: float) -> float:
+    return p / (1 - p)
+
+
+def _percent(p: float) -> str:
+    """A probability as text; the combination is not precise enough to state 0% or 100%."""
+    return "above 99%" if p > 0.99 else "below 1%" if p < 0.01 else f"{p:.0%}"
+
+
+def combine_three(ecg: dict, mri: dict, clinical: dict, settings: dict) -> dict:
+    """Probability of ischaemic heart disease from all three models, by Bayes' rule.
+
+    The health-record probability is the starting point (pre-test probability). The
+    ECG's calibrated MI probability becomes a likelihood ratio against the MI rate
+    of the fold it was calibrated on; the MRI classifier's infarction call has
+    out-of-fold likelihood ratios. Each step is returned so the result can be read
+    as a clinician would read it: start here, this test moved it by this much.
+    Probabilities are clipped first so no single model can force certainty.
+    """
+    low, high = settings["probability_clip"]
+    clip = lambda p: min(max(p, low), high)
+    prior = clip(clinical["model"]["probability"])
+    odds = _odds(prior)
+    steps = [{"modality": "Health record", "kind": "starting probability", "probability": round(prior, 4),
+              "text": f"Clinical findings give {prior:.0%} probability of coronary artery disease."}]
+
+    ecg_class = settings["ecg"]["class"]
+    p_ecg = clip(next(f["probability"] for f in ecg["findings"] if f["code"] == ecg_class))
+    ecg_ratio = _odds(p_ecg) / _odds(settings["ecg"]["calibration_rate"])
+    odds *= ecg_ratio
+    steps.append({"modality": "ECG", "kind": "likelihood ratio", "ratio": round(ecg_ratio, 3),
+                  "probability": round(odds / (1 + odds), 4),
+                  "text": f"ECG myocardial infarction {p_ecg:.0%} (likelihood ratio {ecg_ratio:.2g}): "
+                          f"now {_percent(odds / (1 + odds))}."})
+
+    if "diagnosis" in mri:
+        mri_settings = settings["mri"]
+        called = mri["diagnosis"]["probabilities"][0]["code"] == mri_settings["class"]
+        mri_ratio = mri_settings["lr_positive"] if called else mri_settings["lr_negative"]
+        odds *= mri_ratio
+        steps.append({"modality": "MRI", "kind": "likelihood ratio", "ratio": round(mri_ratio, 3),
+                      "probability": round(odds / (1 + odds), 4),
+                      "text": f"MRI {'calls' if called else 'does not call'} previous infarction (likelihood ratio "
+                              f"{mri_ratio:.2g}): now {_percent(odds / (1 + odds))}."})
+    else:
+        steps.append({"modality": "MRI", "kind": "not used", "ratio": 1.0, "probability": round(odds / (1 + odds), 4),
+                      "text": "No MRI diagnosis (it needs two volumes with known pixel size and height and weight), "
+                              "so the MRI did not change the probability."})
+
+    final = odds / (1 + odds)
+    return {
+        "target": settings["target"],
+        "probability": round(final, 4),
+        "steps": steps,
+        "method": ("Bayes' rule: the health-record probability multiplied, as odds, by the ECG's and the MRI's "
+                   "likelihood ratios. Each model was trained and tested on its own data."),
+        "assumptions": settings["assumptions"],
+    }
+
+
 def summarize(ecg: dict, mri: dict, clinical: dict) -> dict:
     reasons = []
 
@@ -1019,6 +1120,13 @@ def summarize(ecg: dict, mri: dict, clinical: dict) -> dict:
         if item["level"] in ("high", "moderate"):
             add(item["level"], "Clinical", f"{item['item']}: {item['text']}")
 
+    fusion = combine_three(ecg, mri, clinical, models()["three_way"])
+    p = fusion["probability"]
+    if p >= 0.7:
+        add("high", "All three", f"Combined probability of ischaemic heart disease is {_percent(p)} (untested combination).")
+    elif p >= 0.4:
+        add("moderate", "All three", f"Combined probability of ischaemic heart disease is {_percent(p)} (untested combination).")
+
     levels = {r["level"] for r in reasons}
     attention = "High" if "high" in levels else "Moderate" if "moderate" in levels else "Low"
     if not reasons:
@@ -1028,6 +1136,7 @@ def summarize(ecg: dict, mri: dict, clinical: dict) -> dict:
     return {
         "attention": attention,
         "reasons": reasons,
+        "fusion": fusion,
         "combined": combined,
         "combined_method": ("Bayesian update of the ECG probability by the MRI classifier's likelihood ratio, "
                             "only where both models name the same diagnosis. It assumes the ECG and MRI findings "
@@ -1035,9 +1144,10 @@ def summarize(ecg: dict, mri: dict, clinical: dict) -> dict:
                             "same patients, so this is untested and the combined figure is not a validated "
                             "probability. The attention level above still comes from the listed thresholds.")
                            if combined else None,
-        "method": "Each modality is analysed by its own trained model. No trained fusion model exists yet, "
-                  "because no public dataset pairs ECG, MRI and health records for the same patients, so this "
-                  "summary combines the results with the explicit thresholds listed here.",
+        "method": "Each modality is analysed by its own trained and tested model, and the three are combined by "
+                  "Bayes' rule into one probability of ischaemic heart disease. No public dataset has ECG, MRI and "
+                  "health records for the same patients, so the combination itself is not validated; the "
+                  "attention level comes from the explicit thresholds listed here.",
     }
 
 

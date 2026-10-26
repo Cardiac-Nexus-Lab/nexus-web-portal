@@ -280,6 +280,14 @@ def build_report_pdf(result: dict) -> bytes:
         story += [Spacer(1, 2 * mm), _p("ECG and MRI together", "cellb")]
         story += [_p(item["text"], "cell") for item in summary["combined"]]
         story += [_p(summary["combined_method"], "small")]
+    fusion = summary.get("fusion")
+    if fusion:
+        percent = lambda p: "above 99%" if p > 0.99 else "below 1%" if p < 0.01 else f"{p:.0%}"
+        story += [Spacer(1, 2 * mm),
+                  _p(f"Health record, ECG and MRI combined: {percent(fusion['probability'])} "
+                     f"probability of {fusion['target']}", "cellb")]
+        story += [_p(f"•  {step['text']}", "cell") for step in fusion["steps"]]
+        story += [_p(f"{fusion['method']} {' '.join(fusion['assumptions'])}", "small")]
 
     # Clinical
     clinical = result["clinical"]
@@ -289,8 +297,13 @@ def build_report_pdf(result: dict) -> bytes:
         rows.append([_p(flag["item"], "cellb"), _p(flag["text"], "cell"),
                      Paragraph(f'<font color="{DOT.get(flag["level"], "#8aa4b0")}">●</font> '
                                f'{status_text.get(flag["level"], flag["level"])}', STYLES["cell"])])
-    story += [_p("2. Clinical values", "h2"), _p(clinical["method"], "small"), Spacer(1, 2 * mm),
-              _table(rows, [36 * mm, full - 36 * mm - 32 * mm, 32 * mm])]
+    story += [_p("2. Clinical values", "h2"), _p(clinical["method"], "small"), Spacer(1, 2 * mm)]
+    model = clinical.get("model")
+    if model:
+        story += [_p(f"Probability of {model['outcome']}: {model['probability']:.0%}", "cellb")]
+        story += [_p(f"•  {b}", "cell") for b in model["because"]]
+        story += [_p(f"{model['population']} {model['evidence']}", "small"), Spacer(1, 2 * mm)]
+    story += [_table(rows, [36 * mm, full - 36 * mm - 32 * mm, 32 * mm])]
 
     # ECG
     ecg = result["ecg"]
