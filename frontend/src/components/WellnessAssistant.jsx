@@ -16,17 +16,29 @@ import {
 
 // Pretrained models, loaded from pinned CDN builds:
 //  - Emotion: FaceExpressionNet from @vladmandic/face-api (7 classes, trained on labelled face images)
-//  - Body / hands: Google MediaPipe Pose Landmarker (lite), used to see where the hands are
+//  - Hands: Google MediaPipe Hand Landmarker, used to see where a hand is resting relative to the face
 const FACE_API_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js';
 const FACE_API_MODELS = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model';
 const TASKS_VISION_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 const TASKS_VISION_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
-const POSE_MODEL =
-  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+const HAND_MODEL =
+  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
 const TICK_MS = 250;          // run the models 4 times a second; the heart-rate face mesh keeps the full frame rate
 const MOOD_WINDOW = 12;       // average emotions over the last ~3 seconds
-const GESTURE_HOLD_MS = 2000; // a hand must stay on the chest or head this long before we react
+const GESTURE_HOLD_MS = 2000; // a hand must stay in one place this long before we react
+const FACE_MEMORY_MS = 1500;  // a hand over the face can hide it from the detector; reuse the last box briefly
+
+const REGION_LABELS = {
+  chest: 'On chest',
+  throat: 'On throat / neck',
+  head: 'On head / forehead',
+  jaw: 'On jaw / cheek',
+  mouth: 'Over mouth',
+  eyes: 'Over eyes'
+};
+// When both hands are somewhere, report the more serious place
+const REGION_PRIORITY = ['chest', 'throat', 'head', 'jaw', 'mouth', 'eyes'];
 
 const MOOD_LABELS = {
   neutral: 'Calm',
@@ -41,6 +53,8 @@ const MOOD_LABELS = {
 // Indian emergency numbers: 112 (all emergencies), 108 (ambulance), 14416 (Tele-MANAS mental health, 24x7, free)
 const HOSPITAL_MAP = 'https://www.google.com/maps/search/hospital+emergency+near+me';
 const CLINIC_MAP = 'https://www.google.com/maps/search/clinic+near+me';
+const DENTIST_MAP = 'https://www.google.com/maps/search/dentist+near+me';
+const EYE_MAP = 'https://www.google.com/maps/search/eye+hospital+near+me';
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -58,46 +72,33 @@ function loadScript(src) {
   });
 }
 
-function avgPoint(points) {
-  const seen = points.filter((p) => p && (p.visibility ?? 1) > 0.3);
-  if (seen.length === 0) return null;
+// Palm centre (wrist + knuckles) of a hand from MediaPipe's 21 landmarks, in video pixels
+function palmCentre(lm, w, h) {
+  const idx = [0, 5, 9, 13, 17];
   return {
-    x: seen.reduce((a, p) => a + p.x, 0) / seen.length,
-    y: seen.reduce((a, p) => a + p.y, 0) / seen.length
+    x: (idx.reduce((a, i) => a + lm[i].x, 0) / idx.length) * w,
+    y: (idx.reduce((a, i) => a + lm[i].y, 0) / idx.length) * h
   };
 }
 
-// Where is each hand relative to the body? Returns 'chest', 'head' or null.
-// Pose landmarks: 0 nose, 11/12 shoulders, 15/16 wrists, 17-22 pinky/index/thumb.
-function locateHands(lm) {
-  if (!lm || lm.length < 23) return null;
-  const ls = lm[11];
-  const rs = lm[12];
-  const nose = lm[0];
-  if ((ls.visibility ?? 0) < 0.5 || (rs.visibility ?? 0) < 0.5) return null;
-
-  const sw = Math.abs(ls.x - rs.x); // shoulder width, the body's own ruler
-  if (sw < 0.05) return null;
-  const shoulderY = (ls.y + rs.y) / 2;
-  const minX = Math.min(ls.x, rs.x) - 0.1 * sw;
-  const maxX = Math.max(ls.x, rs.x) + 0.1 * sw;
-
-  const hands = [
-    avgPoint([lm[15], lm[17], lm[19], lm[21]]),
-    avgPoint([lm[16], lm[18], lm[20], lm[22]])
-  ].filter(Boolean);
-
-  let onHead = false;
-  let onChest = false;
-  for (const h of hands) {
-    const toNose = Math.hypot(h.x - nose.x, h.y - nose.y);
-    // at or above nose height, so a hand resting under the chin doesn't count
-    if (toNose < 0.8 * sw && h.y < nose.y + 0.1 * sw) onHead = true;
-    if (h.x > minX && h.x < maxX && h.y > shoulderY - 0.05 * sw && h.y < shoulderY + 1.1 * sw) onChest = true;
-  }
-  if (onChest) return 'chest';
-  if (onHead) return 'head';
+// Where is a hand relative to the face? The face box (brows to chin) is the ruler, so this works
+// at any distance from the camera, with the view running from the head down to the chest.
+function locateHand(p, box) {
+  const u = (p.x - box.x) / box.width;  // 0 = left edge of face, 1 = right edge
+  const v = (p.y - box.y) / box.height; // 0 = brows, 1 = chin
+  if (v > 1.6 && v < 3.8 && u > -0.9 && u < 1.9) return 'chest';
+  if (v >= 0.95 && v <= 1.6 && u > -0.15 && u < 1.15) return 'throat';
+  if (v > 0.55 && v < 0.95 && u > 0.25 && u < 0.75) return 'mouth';
+  if (v > 0.15 && v <= 0.55 && u > 0.1 && u < 0.9) return 'eyes';
+  if (v > 0.4 && v < 1.05 && ((u > -0.35 && u <= 0.3) || (u >= 0.7 && u < 1.35))) return 'jaw';
+  if (v > -0.9 && v <= 0.4 && u > -0.5 && u < 1.5) return 'head';
   return null;
+}
+
+function locateHands(hands, box, w, h) {
+  if (!box || !hands || hands.length === 0) return null;
+  const found = hands.map((lm) => locateHand(palmCentre(lm, w, h), box)).filter(Boolean);
+  return REGION_PRIORITY.find((r) => found.includes(r)) || null;
 }
 
 // Turns what the camera sees into plain advice.
@@ -152,6 +153,103 @@ function buildAssessment({ gesture, mood, distress, heartRate }) {
     };
   }
 
+  if (gesture === 'throat') {
+    return {
+      level: distress > 0.45 ? 'urgent' : 'warning',
+      icon: AlertTriangle,
+      title: 'Hand on throat — sore throat, or trouble breathing or swallowing?',
+      happening:
+        'Holding the throat usually means a sore or scratchy throat (often a cold or infection), pain when swallowing, or a feeling of tightness. If someone grips their throat and cannot speak, cough or breathe, they may be choking.' +
+        hrNote,
+      doNow: [
+        'If you cannot speak, cough or breathe: get someone to help now and call 112. A helper should give up to 5 firm back blows between the shoulder blades, then up to 5 abdominal thrusts.',
+        'For a sore throat: gargle with warm salt water (half a teaspoon of salt in a glass of warm water) a few times a day.',
+        'Sip warm fluids — warm water with honey and lemon, or tea. Avoid very cold or spicy food for now.',
+        'Paracetamol (adults 500 mg–1 g, follow the label) can ease the pain; throat lozenges help too.',
+        'Rest your voice and stay hydrated.'
+      ],
+      redFlags:
+        'Go to emergency (108 / 112) if breathing is noisy or difficult, you cannot swallow your own saliva or are drooling, the tongue, lips or neck are swelling (possible allergic reaction), or you have high fever with a very stiff neck.',
+      where: 'A general physician if it lasts more than a week, keeps coming back, or comes with high fever or white patches on the tonsils.',
+      call: [{ label: 'Call 112', tel: '112' }],
+      map: { label: 'Find a clinic nearby', href: CLINIC_MAP }
+    };
+  }
+
+  if (gesture === 'jaw') {
+    return {
+      level: 'warning',
+      icon: Hand,
+      title: 'Hand on jaw or cheek — toothache or jaw pain?',
+      happening:
+        'Holding the cheek or jaw usually means toothache, a sore gum, jaw-joint pain (from clenching or grinding, often with stress), or sinus pressure. Rarely, jaw pain together with chest pressure can come from the heart.' +
+        hrNote,
+      doNow: [
+        'Rinse your mouth with warm salt water and gently floss around the sore tooth.',
+        'Hold a cold pack wrapped in a cloth against the outside of the cheek for 15 minutes.',
+        'Paracetamol or ibuprofen (follow the label; skip ibuprofen with stomach ulcers, kidney problems or asthma it worsens) can ease the pain.',
+        'Eat soft food on the other side and avoid very hot, cold or sweet things.',
+        'If you clench your jaw, relax it: lips together, teeth apart, tongue resting on the roof of the mouth.'
+      ],
+      redFlags:
+        'Call 108 / 112 if jaw pain comes with chest pressure, sweating, breathlessness or pain in the arm. Get urgent care if the face or neck is swelling, you have fever, or you find it hard to open the mouth, swallow or breathe.',
+      where: 'A dentist for tooth or gum pain, ideally within a day or two; a general physician for jaw-joint or sinus pain that does not settle.',
+      call: [],
+      map: { label: 'Find a dentist nearby', href: DENTIST_MAP }
+    };
+  }
+
+  if (gesture === 'mouth') {
+    return {
+      level: 'warning',
+      icon: AlertTriangle,
+      title: 'Hand over mouth — feeling sick, or coughing?',
+      happening:
+        'Covering the mouth often means nausea (feeling like vomiting), a coughing fit, or a mouth or tooth problem. Nausea can come from acidity, something you ate, motion sickness, anxiety or not eating.' +
+        hrNote,
+      doNow: [
+        'Sit upright, loosen tight clothing and breathe slowly through the nose; get some fresh air.',
+        'Take small, frequent sips of water or ORS rather than large gulps.',
+        'Ginger tea, plain crackers or dry toast can settle the stomach. Avoid oily or heavy food for a few hours.',
+        'If coughing: sip warm water with honey, and cough into your elbow; wear a mask if you have a cold.',
+        'If you vomit more than a few times, keep sipping ORS to replace lost fluids.'
+      ],
+      redFlags:
+        'Get urgent help (108 / 112) if you vomit blood or something like coffee grounds, have severe belly pain, chest pain, cannot keep any fluids down for a day, or feel faint and very dry (little or no urine).',
+      where: 'A general physician if nausea or cough lasts more than a few days or keeps coming back.',
+      call: [],
+      map: { label: 'Find a clinic nearby', href: CLINIC_MAP }
+    };
+  }
+
+  if (gesture === 'eyes') {
+    const low = mood === 'sad' || distress > 0.45;
+    return {
+      level: low ? 'support' : 'warning',
+      icon: low ? Frown : AlertTriangle,
+      title: low ? 'Covering your eyes and you look low — tired, upset or crying?' : 'Hand over eyes — tired or sore eyes?',
+      happening: low
+        ? 'Covering the eyes with a low mood often means feeling overwhelmed, tired or upset. It can also be eye strain after a long time at a screen.'
+        : 'Rubbing or covering the eyes usually means eye strain from screens, tiredness, dry eyes, allergy, or something in the eye.',
+      doNow: [
+        'Try not to rub your eyes — it can make irritation worse.',
+        '20-20-20 rule: every 20 minutes, look at something 20 feet away for 20 seconds, and blink fully.',
+        'If something is in the eye, rinse it with clean running water for a few minutes.',
+        'A cool, damp cloth over closed eyes for a few minutes can soothe them; lubricating eye drops help dry eyes.',
+        low
+          ? 'If you feel overwhelmed, take a short break, drink water, and talk to someone you trust.'
+          : 'Make sure you are getting enough sleep tonight.'
+      ],
+      redFlags:
+        'Go to emergency eye care right away for sudden loss or blurring of vision, an eye injury, a chemical splash (rinse with water for 15 minutes first), or severe eye pain with redness and headache.',
+      where: low
+        ? 'Tele-MANAS (14416, free, 24x7) if you are feeling low often; an eye doctor if your eyes stay red or sore for more than 2 days.'
+        : 'An eye doctor (ophthalmologist) if redness, pain or blurry vision lasts more than 2 days.',
+      call: low ? [{ label: 'Call Tele-MANAS 14416', tel: '14416' }] : [],
+      map: low ? null : { label: 'Find an eye doctor nearby', href: EYE_MAP }
+    };
+  }
+
   if (mood === 'sad') {
     return {
       level: 'support',
@@ -200,7 +298,7 @@ function buildAssessment({ gesture, mood, distress, heartRate }) {
       happening:
         mood === 'angry'
           ? 'Your face shows frustration or tension. Stress raises heart rate and blood pressure for a while.' + hrNote
-          : 'Your face shows discomfort. If you feel sick or in pain, point to where it hurts — chest or head.',
+          : 'Your face shows discomfort. If you feel sick or in pain, put your hand where it hurts.',
       doNow: [
         'Step away from what is bothering you for a few minutes.',
         'Breathe out slowly, longer than you breathe in.',
@@ -231,7 +329,7 @@ function buildAssessment({ gesture, mood, distress, heartRate }) {
     title: mood === 'surprised' ? 'You look surprised' : 'You look calm',
     happening: 'No signs of pain or distress right now.' + hrNote,
     doNow: [
-      'If something hurts, put your hand where it hurts (chest or head) and hold it for two seconds.'
+      'If something hurts, put your hand where it hurts (head, eyes, jaw, mouth, throat or chest) and hold it there for two seconds.'
     ],
     where: null,
     call: [],
@@ -255,7 +353,8 @@ export default function WellnessAssistant({ videoRef, cameraActive, heartRate, o
   const [assessment, setAssessment] = useState(null);
 
   const faceApiRef = useRef(null);
-  const poseRef = useRef(null);
+  const handsRef = useRef(null);
+  const lastFaceRef = useRef({ box: null, at: 0 });
   const timerRef = useRef(null);
   const loadStartedRef = useRef(false);
   const mountedRef = useRef(true);
@@ -282,10 +381,10 @@ export default function WellnessAssistant({ videoRef, cameraActive, heartRate, o
 
         const vision = await import(/* @vite-ignore */ TASKS_VISION_URL);
         const fileset = await vision.FilesetResolver.forVisionTasks(TASKS_VISION_WASM);
-        poseRef.current = await vision.PoseLandmarker.createFromOptions(fileset, {
-          baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'GPU' },
+        handsRef.current = await vision.HandLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: HAND_MODEL, delegate: 'GPU' },
           runningMode: 'VIDEO',
-          numPoses: 1
+          numHands: 2
         });
         if (mountedRef.current) setModelStatus('ready');
       } catch (err) {
@@ -331,9 +430,11 @@ export default function WellnessAssistant({ videoRef, cameraActive, heartRate, o
           }
         }
 
-        const pose = poseRef.current.detectForVideo(video, performance.now());
-        const where = locateHands(pose?.landmarks?.[0]);
         const now = performance.now();
+        if (face) lastFaceRef.current = { box: face.detection.box, at: now };
+        const faceBox = now - lastFaceRef.current.at < FACE_MEMORY_MS ? lastFaceRef.current.box : null;
+        const hands = handsRef.current.detectForVideo(video, now);
+        const where = locateHands(hands?.landmarks, faceBox, video.videoWidth, video.videoHeight);
         if (where !== gestureSinceRef.current.kind) gestureSinceRef.current = { kind: where, since: now };
         const heldMs = where ? now - gestureSinceRef.current.since : 0;
         const confirmed = where && heldMs >= GESTURE_HOLD_MS ? where : null;
@@ -350,10 +451,10 @@ export default function WellnessAssistant({ videoRef, cameraActive, heartRate, o
         // Only change the advice when we have something to go on; keep a chest/head alert
         // on screen until the person is clearly calm again, so it doesn't flicker away.
         if (!face && !confirmed) {
-          setAssessment((prev) => (prev && (prev.gesture === 'chest' || prev.gesture === 'head') ? prev : null));
+          setAssessment((prev) => (prev?.gesture ? prev : null));
         } else if (confirmed || (mood && moodHistoryRef.current.length >= 4)) {
           setAssessment((prev) => {
-            if (!confirmed && prev && (prev.gesture === 'chest' || prev.gesture === 'head') && distress > 0.3) return prev;
+            if (!confirmed && prev?.gesture && distress > 0.3) return prev;
             return { ...buildAssessment({ gesture: confirmed, mood, distress, heartRate: heartRateRef.current }), gesture: confirmed };
           });
         }
@@ -373,7 +474,7 @@ export default function WellnessAssistant({ videoRef, cameraActive, heartRate, o
     return () => {
       mountedRef.current = false;
       try {
-        poseRef.current?.close();
+        handsRef.current?.close();
       } catch (_) {}
     };
   }, []);
@@ -403,7 +504,7 @@ export default function WellnessAssistant({ videoRef, cameraActive, heartRate, o
 
       {cameraActive && modelStatus === 'loading' && (
         <div className="wa-empty">
-          <Loader2 size={20} className="wa-spin" /> Loading the emotion and body-pose models (first time only)…
+          <Loader2 size={20} className="wa-spin" /> Loading the emotion and hand-tracking models (first time only)…
         </div>
       )}
 
@@ -422,7 +523,7 @@ export default function WellnessAssistant({ videoRef, cameraActive, heartRate, o
               <div style={{ flex: 1 }}>
                 <div className="wa-tile-label">Hands</div>
                 <div className="wa-tile-value">
-                  {gesture === 'chest' ? 'On chest' : gesture === 'head' ? 'On head' : 'Not touching chest or head'}
+                  {gesture ? REGION_LABELS[gesture] : 'Not touching face, neck or chest'}
                 </div>
                 {gesture && gestureProgress < 1 && (
                   <div className="wa-hold">
@@ -503,7 +604,7 @@ export default function WellnessAssistant({ videoRef, cameraActive, heartRate, o
             <div className="wa-empty">
               {faceSeen
                 ? 'Reading your expression…'
-                : 'Face the camera. If something hurts, place your hand on your chest or head for two seconds.'}
+                : 'Sit so the camera sees you from head to chest. If something hurts, hold your hand there for two seconds.'}
             </div>
           )}
 
