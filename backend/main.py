@@ -111,8 +111,8 @@ class DBWellnessScreening(Base):
     user_id = Column(String, nullable=True, index=True)
     heart_rate_bpm = Column(Float, nullable=False)
     hrv_rmssd_ms = Column(Float, nullable=True)
-    stress_index = Column(Integer, nullable=False)
-    stress_level = Column(String, nullable=False)
+    stress_index = Column(Integer, nullable=True)
+    stress_level = Column(String, nullable=True)
     confidence = Column(Float, default=0.95)
     guidance_notes = Column(Text, nullable=True)
     fatigue_level = Column(String, nullable=True)
@@ -237,14 +237,14 @@ class WellnessScreeningCreateRequest(BaseModel):
     patient_id: Optional[str] = None
     heart_rate_bpm: float
     hrv_rmssd_ms: Optional[float] = None
-    stress_index: int
-    stress_level: str
+    stress_index: Optional[int] = None
+    stress_level: Optional[str] = None
     confidence: Optional[float] = 0.95
     guidance_notes: Optional[str] = None
-    fatigue_level: Optional[str] = "Alert & Attentive"
-    sleepiness_level: Optional[str] = "Awake"
-    facial_expression: Optional[str] = "Neutral"
-    signal_quality: Optional[str] = "Good (78%)"
+    fatigue_level: Optional[str] = None
+    sleepiness_level: Optional[str] = None
+    facial_expression: Optional[str] = None
+    signal_quality: Optional[str] = None
     details_json: Optional[str] = None
 
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")

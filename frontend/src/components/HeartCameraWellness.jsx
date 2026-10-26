@@ -105,7 +105,8 @@ export default function HeartCameraWellness({ token, setPage }) {
   const [modelStatus, setModelStatus] = useState('loading');
   const [modelErrorMessage, setModelErrorMessage] = useState('');
 
-  // Screening Session State
+  // Screening Session State: 'idle' | 'screening' | 'completed' | 'stopped' | 'failed'
+  const [screeningStatus, setScreeningStatus] = useState('idle');
   const [sessionActive, setSessionActive] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [sessionSeconds, setSessionSeconds] = useState(0);
@@ -155,7 +156,31 @@ export default function HeartCameraWellness({ token, setPage }) {
   // Concurrency & Hardware Synchronization Refs (eliminates stale React state closures)
   const cameraActiveRef = useRef(false);
   const isProcessingFrameRef = useRef(false);
+  const sessionActiveRef = useRef(false);
+  const screeningIntervalRef = useRef(null);
+  const faceDetectedRef = useRef(false);
   const roiCanvasRef = useRef(null);
+
+  // Latest verified measurements cache (immune to stale React closures)
+  const latestBiometricsRef = useRef({
+    estimatedBpm: null,
+    bpmTrend: [],
+    signalQuality: 'Not available',
+    sqiScore: 0,
+    hrvRmssd: null,
+    stressIndex: null,
+    stressLevel: null,
+    abnormalityAlert: null,
+    ear: null,
+    blinkCount: 0,
+    blinkRate: null,
+    yawnCount: 0,
+    perclos: null,
+    fatigueIndex: null,
+    fatigueLevel: null,
+    sleepinessLevel: null,
+    facialExpression: null
+  });
 
   // Optical rPPG & Statistical Buffers
   const rppgBufferRef = useRef([]);
@@ -200,6 +225,26 @@ export default function HeartCameraWellness({ token, setPage }) {
     setCompletedReport(null);
     setSignalErrorMessage('');
 
+    latestBiometricsRef.current = {
+      estimatedBpm: null,
+      bpmTrend: [],
+      signalQuality: 'Not available',
+      sqiScore: 0,
+      hrvRmssd: null,
+      stressIndex: null,
+      stressLevel: null,
+      abnormalityAlert: null,
+      ear: null,
+      blinkCount: 0,
+      blinkRate: null,
+      yawnCount: 0,
+      perclos: null,
+      fatigueIndex: null,
+      fatigueLevel: null,
+      sleepinessLevel: null,
+      facialExpression: null
+    };
+
     rppgBufferRef.current = [];
     timestampsRef.current = [];
     detectedPeaksRef.current = [];
@@ -208,6 +253,9 @@ export default function HeartCameraWellness({ token, setPage }) {
     eyeClosedFramesRef.current = 0;
     yawnFramesRef.current = 0;
     motionHistoryRef.current = [];
+    sessionValidFaceTicksRef.current = 0;
+    sessionTotalTicksRef.current = 0;
+    sessionSqiSumRef.current = 0;
   };
 
   // Load patients
@@ -394,20 +442,42 @@ export default function HeartCameraWellness({ token, setPage }) {
     }
   };
 
+  const stopScreening = () => {
+    if (screeningIntervalRef.current) {
+      clearInterval(screeningIntervalRef.current);
+      screeningIntervalRef.current = null;
+    }
+    setSessionActive(false);
+    sessionActiveRef.current = false;
+    setScreeningStatus('stopped');
+    setScanProgress(0);
+    setSessionSeconds(0);
+    resetAllResults();
+    showToast('info', 'Screening stopped. Biometric processing halted.');
+  };
+
   const handleCameraFailure = (msg) => {
     stopCamera();
     resetAllResults();
     cameraActiveRef.current = false;
     isProcessingFrameRef.current = false;
+    sessionActiveRef.current = false;
+    setScreeningStatus('idle');
     setCameraStatus('error');
-    const finalMsg = 'Camera is not working. Please connect or enable your camera and try again.';
+    const finalMsg = msg || 'Camera is not working. Please connect or enable your camera and try again.';
     setCameraErrorMessage(finalMsg);
     showToast('error', finalMsg);
   };
 
   const stopCamera = () => {
+    if (screeningIntervalRef.current) {
+      clearInterval(screeningIntervalRef.current);
+      screeningIntervalRef.current = null;
+    }
     cameraActiveRef.current = false;
     isProcessingFrameRef.current = false;
+    sessionActiveRef.current = false;
+    faceDetectedRef.current = false;
     if (freezeCheckIntervalRef.current) {
       clearInterval(freezeCheckIntervalRef.current);
       freezeCheckIntervalRef.current = null;
@@ -426,6 +496,8 @@ export default function HeartCameraWellness({ token, setPage }) {
     setCameraStatus('idle');
     setFaceDetected(false);
     setSessionActive(false);
+    setScreeningStatus('idle');
+    resetAllResults();
   };
 
   // Video Freeze Detection
@@ -513,6 +585,7 @@ export default function HeartCameraWellness({ token, setPage }) {
     // 1. FACE DETECTION VALIDATION
     if (!results || !results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
       setFaceDetected(false);
+      faceDetectedRef.current = false;
       setFaceStatusMessage('No face detected. Please position your face in the center of the camera.');
       setSignalQuality('No face detected');
       setSqiScore(0);
@@ -522,6 +595,7 @@ export default function HeartCameraWellness({ token, setPage }) {
     const landmarks = results.multiFaceLandmarks[0];
     if (!landmarks || landmarks.length < 468) {
       setFaceDetected(false);
+      faceDetectedRef.current = false;
       setFaceStatusMessage('Partial face detected. Please face the camera directly with good lighting.');
       setSignalQuality('Poor (Partial Face)');
       setSqiScore(20);
@@ -530,44 +604,11 @@ export default function HeartCameraWellness({ token, setPage }) {
 
     // Face is present, verified and tracked!
     setFaceDetected(true);
+    faceDetectedRef.current = true;
     setFaceStatusMessage('Face detected and tracking (468 facial landmarks)');
     const now = performance.now();
-    totalFramesRef.current++;
 
-    if (sessionActive) {
-      sessionValidFaceTicksRef.current++;
-    }
-
-    // 2. Head Motion Stability
-    const nose = landmarks[1];
-    let isStable = true;
-    if (nose) {
-      const history = motionHistoryRef.current;
-      history.push({ x: nose.x * w, y: nose.y * h, t: now });
-      if (history.length > 30) history.shift();
-      if (history.length >= 2) {
-        const dx = Math.abs(history[history.length - 1].x - history[0].x);
-        const dy = Math.abs(history[history.length - 1].y - history[0].y);
-        const motionMag = dx + dy;
-        if (motionMag > 35) {
-          isStable = false;
-          setSignalQuality('Poor (High Motion)');
-          setSqiScore(30);
-        } else if (motionMag > 16) {
-          setSignalQuality('Fair (Minor Motion)');
-          setSqiScore(55);
-        } else {
-          setSignalQuality('Optimal Signal (Stable)');
-          setSqiScore(88);
-        }
-      }
-    }
-
-    if (sessionActive) {
-      sessionSqiSumRef.current += sqiScore;
-    }
-
-    // 3. Anatomical ROIs for rPPG
+    // Anatomical ROIs for rPPG
     const foreheadX = Math.round((landmarks[10].x + landmarks[67].x + landmarks[338].x) / 3 * w);
     const foreheadY = Math.round((landmarks[10].y + landmarks[67].y + landmarks[338].y) / 3 * h);
     const leftCheekX = Math.round(landmarks[118].x * w);
@@ -579,44 +620,102 @@ export default function HeartCameraWellness({ token, setPage }) {
     // Draw visual feedback overlay with clear ROI indicators and contour points
     drawHUDOverlay(ctx, landmarks, w, h, foreheadX, foreheadY, leftCheekX, leftCheekY, rightCheekX, rightCheekY, roiRadius);
 
-    // Extract live rPPG optical signal only if motion is not excessive
+    // CRITICAL: Screening must start ONLY when user explicitly clicks "Start Verified Screening"!
+    // If screening session is NOT active, do not generate biometric measurements!
+    if (!sessionActiveRef.current) {
+      return;
+    }
+
+    // --- SCREENING SESSION ACTIVE PROCESSING ---
+    totalFramesRef.current++;
+    sessionValidFaceTicksRef.current++;
+
+    // Head Motion Stability
+    const nose = landmarks[1];
+    let isStable = true;
+    let currentSqi = 88;
+    let currentQuality = 'Optimal Signal (Stable)';
+
+    if (nose) {
+      const history = motionHistoryRef.current;
+      history.push({ x: nose.x * w, y: nose.y * h, t: now });
+      if (history.length > 30) history.shift();
+      if (history.length >= 2) {
+        const dx = Math.abs(history[history.length - 1].x - history[0].x);
+        const dy = Math.abs(history[history.length - 1].y - history[0].y);
+        const motionMag = dx + dy;
+        if (motionMag > 35) {
+          isStable = false;
+          currentQuality = 'Poor (High Motion)';
+          currentSqi = 30;
+        } else if (motionMag > 16) {
+          currentQuality = 'Fair (Minor Motion)';
+          currentSqi = 55;
+        } else {
+          currentQuality = 'Optimal Signal (Stable)';
+          currentSqi = 88;
+        }
+      }
+    }
+
+    setSignalQuality(currentQuality);
+    setSqiScore(currentSqi);
+    sessionSqiSumRef.current += currentSqi;
+    latestBiometricsRef.current.signalQuality = currentQuality;
+    latestBiometricsRef.current.sqiScore = currentSqi;
+
+    // Extract live rPPG optical signal only if motion is stable
     if (isStable) {
       extractSkinColorROIs(video, foreheadX, foreheadY, leftCheekX, leftCheekY, rightCheekX, rightCheekY, roiRadius, now);
     }
 
-    // 4. Eye Aspect Ratio & Fatigue / Blinking
+    // Eye Aspect Ratio & Fatigue / Blinking
     const leftEAR = calculateEAR(landmarks, true, w, h);
     const rightEAR = calculateEAR(landmarks, false, w, h);
     if (leftEAR !== null && rightEAR !== null) {
       const avgEAR = (leftEAR + rightEAR) / 2.0;
-      setEar(Number(avgEAR.toFixed(3)));
+      const roundedEar = Number(avgEAR.toFixed(3));
+      setEar(roundedEar);
+      latestBiometricsRef.current.ear = roundedEar;
 
       if (avgEAR < 0.20) {
         eyeClosedFramesRef.current++;
         closedFramesCountRef.current++;
         if (eyeClosedFramesRef.current > 35) {
           setSleepinessLevel('Microsleep Risk / Prolonged Eye Closure');
+          latestBiometricsRef.current.sleepinessLevel = 'Microsleep Risk / Prolonged Eye Closure';
         } else if (eyeClosedFramesRef.current > 14) {
           setSleepinessLevel('Drowsy (Heavy Eyelids)');
+          latestBiometricsRef.current.sleepinessLevel = 'Drowsy (Heavy Eyelids)';
         }
       } else {
         if (eyeClosedFramesRef.current >= 2 && eyeClosedFramesRef.current <= 12) {
-          setBlinkCount((prev) => prev + 1);
+          setBlinkCount((prev) => {
+            const next = prev + 1;
+            latestBiometricsRef.current.blinkCount = next;
+            return next;
+          });
         }
         eyeClosedFramesRef.current = 0;
-        if (sleepinessLevel !== 'Severe Sleepiness' && sleepinessLevel !== 'Drowsy') {
+        if (!latestBiometricsRef.current.sleepinessLevel || latestBiometricsRef.current.sleepinessLevel === 'Awake') {
           setSleepinessLevel('Awake');
+          latestBiometricsRef.current.sleepinessLevel = 'Awake';
         }
       }
     }
 
-    // 5. Mouth Aspect Ratio (MAR) & Yawn Detection
+    // Mouth Aspect Ratio (MAR) & Yawn Detection
     const mar = calculateMAR(landmarks, w, h);
     if (mar !== null && mar > 0.52) {
       yawnFramesRef.current++;
       if (yawnFramesRef.current === 35) {
-        setYawnCount((prev) => prev + 1);
+        setYawnCount((prev) => {
+          const next = prev + 1;
+          latestBiometricsRef.current.yawnCount = next;
+          return next;
+        });
         setSleepinessLevel('Yawn Detected (Drowsy)');
+        latestBiometricsRef.current.sleepinessLevel = 'Yawn Detected (Drowsy)';
       }
     } else {
       yawnFramesRef.current = 0;
@@ -624,29 +723,38 @@ export default function HeartCameraWellness({ token, setPage }) {
 
     // PERCLOS
     if (totalFramesRef.current > 0) {
-      const computedPerclos = (closedFramesCountRef.current / totalFramesRef.current) * 100;
-      setPerclos(Number(computedPerclos.toFixed(1)));
+      const computedPerclos = Number(((closedFramesCountRef.current / totalFramesRef.current) * 100).toFixed(1));
+      setPerclos(computedPerclos);
+      latestBiometricsRef.current.perclos = computedPerclos;
     }
 
-    // 6. Facial Expression Classification
+    // Facial Expression Classification
     const expression = classifyFacialExpression(landmarks, w, h);
     if (expression) {
       setFacialExpression(expression);
+      latestBiometricsRef.current.facialExpression = expression;
     }
 
-    // 7. Fatigue Index (Only if data has accumulated)
+    // Fatigue Index (Only when session frames have accumulated)
     if (totalFramesRef.current > 30) {
       let score = 20;
-      if (perclos && perclos > 8) score += 25;
-      if (yawnCount >= 2) score += 30;
-      else if (yawnCount === 1) score += 15;
-      if (ear && ear < 0.23) score += 20;
+      const currentPerclos = latestBiometricsRef.current.perclos;
+      const currentYawns = latestBiometricsRef.current.yawnCount;
+      const currentEar = latestBiometricsRef.current.ear;
+
+      if (currentPerclos && currentPerclos > 8) score += 25;
+      if (currentYawns >= 2) score += 30;
+      else if (currentYawns === 1) score += 15;
+      if (currentEar && currentEar < 0.23) score += 20;
 
       const bounded = Math.min(100, score);
       setFatigueIndex(bounded);
-      if (bounded >= 75) setFatigueLevel('High Fatigue / Sleepy');
-      else if (bounded >= 45) setFatigueLevel('Moderate Fatigue');
-      else setFatigueLevel('Alert & Attentive');
+      latestBiometricsRef.current.fatigueIndex = bounded;
+      let level = 'Alert & Attentive';
+      if (bounded >= 75) level = 'High Fatigue / Sleepy';
+      else if (bounded >= 45) level = 'Moderate Fatigue';
+      setFatigueLevel(level);
+      latestBiometricsRef.current.fatigueLevel = level;
     }
   };
 
@@ -699,6 +807,7 @@ export default function HeartCameraWellness({ token, setPage }) {
 
   // Extract optical skin pixels specifically from forehead and cheek ROIs (Requirement 16)
   const extractSkinColorROIs = (video, fx, fy, lcx, lcy, rcx, rcy, rad, timestamp) => {
+    if (!sessionActiveRef.current) return;
     if (!video || video.videoWidth === 0) return;
 
     if (!roiCanvasRef.current) {
@@ -790,6 +899,7 @@ export default function HeartCameraWellness({ token, setPage }) {
 
   // rPPG Pulse & Heart Rate Processing (Real Data Only)
   const processRppgPulseSignal = () => {
+    if (!sessionActiveRef.current) return;
     const raw = rppgBufferRef.current;
     const times = timestampsRef.current;
     if (raw.length < 60) return;
@@ -845,17 +955,20 @@ export default function HeartCameraWellness({ token, setPage }) {
           setEstimatedBpm((prev) => {
             const smoothedBpm = prev === null ? computedBpm : Math.round(prev * 0.7 + computedBpm * 0.3);
             setBpmTrend((t) => [...t.slice(-14), smoothedBpm]);
+            latestBiometricsRef.current.estimatedBpm = smoothedBpm;
+            latestBiometricsRef.current.bpmTrend = [...(latestBiometricsRef.current.bpmTrend || []).slice(-14), smoothedBpm];
             return smoothedBpm;
           });
 
           // Abnormality Checks
+          let alertMsg = null;
           if (computedBpm > 100) {
-            setAbnormalityAlert('Tachycardia Alert: Elevated heart rate (>100 BPM) observed.');
+            alertMsg = 'Tachycardia Alert: Elevated heart rate (>100 BPM) observed.';
           } else if (computedBpm < 50) {
-            setAbnormalityAlert('Bradycardia Alert: Unusually low heart rate (<50 BPM) observed.');
-          } else {
-            setAbnormalityAlert(null);
+            alertMsg = 'Bradycardia Alert: Unusually low heart rate (<50 BPM) observed.';
           }
+          setAbnormalityAlert(alertMsg);
+          latestBiometricsRef.current.abnormalityAlert = alertMsg;
 
           // Strict HRV Quality Gating
           if (sqiScore >= 65 && ibis.length >= 6) {
@@ -866,15 +979,23 @@ export default function HeartCameraWellness({ token, setPage }) {
             const rmssd = Math.round(Math.sqrt(sumDiffSq / (ibis.length - 1)));
             setHrvRmssd(rmssd);
             setHrvStatusMessage(`${rmssd} ms (RMSSD)`);
+            latestBiometricsRef.current.hrvRmssd = rmssd;
 
             const stress = Math.max(10, Math.min(95, Math.round(100 - rmssd * 1.1 + (computedBpm - 70) * 0.6)));
             setStressIndex(stress);
-            if (stress <= 25) setStressLevel('Relaxed');
-            else if (stress <= 50) setStressLevel('Balanced');
-            else if (stress <= 75) setStressLevel('Moderate Stress');
-            else setStressLevel('High Autonomic Load');
+            latestBiometricsRef.current.stressIndex = stress;
+            let sLevel = 'Balanced';
+            if (stress <= 25) sLevel = 'Relaxed';
+            else if (stress <= 50) sLevel = 'Balanced';
+            else if (stress <= 75) sLevel = 'Moderate Stress';
+            else sLevel = 'High Autonomic Load';
+            setStressLevel(sLevel);
+            latestBiometricsRef.current.stressLevel = sLevel;
           } else {
             setHrvRmssd(null);
+            latestBiometricsRef.current.hrvRmssd = null;
+            latestBiometricsRef.current.stressIndex = null;
+            latestBiometricsRef.current.stressLevel = null;
             setHrvStatusMessage('Not available (Insufficient pulse interval stability)');
           }
         }
@@ -957,9 +1078,16 @@ export default function HeartCameraWellness({ token, setPage }) {
       return;
     }
 
-    // Reset previous results
+    if (screeningIntervalRef.current) {
+      clearInterval(screeningIntervalRef.current);
+      screeningIntervalRef.current = null;
+    }
+
+    // Reset previous results completely
     resetAllResults();
     setSessionActive(true);
+    sessionActiveRef.current = true;
+    setScreeningStatus('screening');
     setScanProgress(0);
     setSessionSeconds(0);
     sessionValidFaceTicksRef.current = 0;
@@ -969,7 +1097,7 @@ export default function HeartCameraWellness({ token, setPage }) {
     const duration = 20; // 20-second clinical screening
     let elapsed = 0;
 
-    const interval = setInterval(() => {
+    screeningIntervalRef.current = setInterval(() => {
       elapsed += 0.5;
       sessionTotalTicksRef.current++;
       setSessionSeconds(Math.round(elapsed));
@@ -977,15 +1105,20 @@ export default function HeartCameraWellness({ token, setPage }) {
       setScanProgress(pct);
 
       if (elapsed >= duration) {
-        clearInterval(interval);
+        clearInterval(screeningIntervalRef.current);
+        screeningIntervalRef.current = null;
         setSessionActive(false);
+        sessionActiveRef.current = false;
+
+        const latest = latestBiometricsRef.current;
 
         // VALIDATION STEP A: Was a face present for at least 65% of the session?
         const facePresenceRatio = sessionValidFaceTicksRef.current / Math.max(1, sessionTotalTicksRef.current);
         if (facePresenceRatio < 0.65) {
           resetAllResults();
-          setSignalErrorMessage('No face detected. Please position your face in front of the camera.');
-          showToast('error', 'No face detected. Please position your face in front of the camera.');
+          setScreeningStatus('failed');
+          setSignalErrorMessage('Screening failed: Face was not maintained in front of the camera. Please try again.');
+          showToast('error', 'Screening failed: Face was not maintained in front of the camera.');
           return;
         }
 
@@ -993,40 +1126,43 @@ export default function HeartCameraWellness({ token, setPage }) {
         const avgSqi = sessionSqiSumRef.current / Math.max(1, sessionTotalTicksRef.current);
         const validPeaks = detectedPeaksRef.current.length;
 
-        if (avgSqi < 45 || validPeaks < 4 || estimatedBpm === null) {
+        if (avgSqi < 40 || validPeaks < 3 || latest.estimatedBpm === null) {
           resetAllResults();
-          setSignalErrorMessage('Insufficient signal quality. Please try again.');
-          showToast('error', 'Insufficient signal quality. Please try again.');
+          setScreeningStatus('failed');
+          setSignalErrorMessage('Screening failed: Insufficient optical pulse signal. Please keep still in good lighting and try again.');
+          showToast('error', 'Screening failed: Insufficient signal quality. Please try again.');
           return;
         }
 
-        // All checks passed! Compile verified report
+        // All checks passed! Compile verified report with ACTUAL measured values only (no fake fallbacks)
+        const measuredBpm = latest.estimatedBpm;
         const report = {
           id: `WLN-${Date.now().toString().slice(-8)}`,
-          patient_id: selectedPatientId || 'CNX-P01',
-          patient_name: patients.find((p) => (p.id || p.patient_id) === selectedPatientId)?.name || 'Eleanor Vance',
-          heart_rate_bpm: estimatedBpm,
-          signal_quality: `${signalQuality} (${Math.round(avgSqi)}%)`,
-          hrv_rmssd_ms: hrvRmssd,
-          stress_index: stressIndex || 40,
-          stress_level: stressLevel || 'Balanced',
-          fatigue_index: fatigueIndex || 25,
-          fatigue_level: fatigueLevel || 'Alert & Attentive',
-          sleepiness_level: sleepinessLevel || 'Awake',
-          facial_expression: facialExpression || 'Neutral',
-          abnormality: abnormalityAlert || 'Normal Sinus Rhythm',
+          patient_id: selectedPatientId || null,
+          patient_name: patients.find((p) => (p.id || p.patient_id) === selectedPatientId)?.name || 'Unassigned Patient',
+          heart_rate_bpm: measuredBpm,
+          signal_quality: `${latest.signalQuality || 'Optimal Signal'} (${Math.round(avgSqi)}%)`,
+          hrv_rmssd_ms: latest.hrvRmssd,
+          stress_index: latest.stressIndex,
+          stress_level: latest.stressLevel,
+          fatigue_index: latest.fatigueIndex,
+          fatigue_level: latest.fatigueLevel,
+          sleepiness_level: latest.sleepinessLevel,
+          facial_expression: latest.facialExpression,
+          abnormality: latest.abnormalityAlert || 'Normal Sinus Rhythm',
           details: {
-            ear: ear !== null ? ear.toFixed(3) : 'Not available',
-            blink_rate: blinkRate !== null ? `${blinkRate} / min` : 'Not available',
-            perclos: perclos !== null ? `${perclos}%` : 'Not available',
-            yawns: yawnCount.toString()
+            ear: latest.ear !== null ? latest.ear.toFixed(3) : 'Not available',
+            blink_rate: latest.blinkRate !== null ? `${latest.blinkRate} / min` : (latest.blinkCount > 0 ? `${latest.blinkCount} blinks in 20s` : '0 blinks'),
+            perclos: latest.perclos !== null ? `${latest.perclos}%` : 'Not available',
+            yawns: latest.yawnCount.toString()
           },
-          guidance_notes: getClinicalGuidance(stressLevel, fatigueLevel, abnormalityAlert),
+          guidance_notes: getClinicalGuidance(latest.stressLevel, latest.fatigueLevel, latest.abnormalityAlert),
           timestamp: new Date().toLocaleString()
         };
 
         setCompletedReport(report);
-        showToast('success', `Screening complete! Actual estimated HR: ${estimatedBpm} BPM.`);
+        setScreeningStatus('completed');
+        showToast('success', `Screening complete! Actual measured HR: ${measuredBpm} BPM.`);
       }
     }, 500);
   };
@@ -1041,8 +1177,10 @@ export default function HeartCameraWellness({ token, setPage }) {
     }
     if (stress === 'High Autonomic Load' || stress === 'Moderate Stress') {
       text += 'Autonomic balance indicates elevated sympathetic drive. Recommended: 5 minutes of 4-4-4-4 Box Breathing to stimulate vagus nerve activity.';
-    } else {
+    } else if (stress) {
       text += 'Optimal parasympathetic regulation detected. Continue routine physical activity and sleep hygiene.';
+    } else {
+      text += 'Screening completed with verified optical rPPG pulse monitoring.';
     }
     return text;
   };
@@ -1233,7 +1371,7 @@ export default function HeartCameraWellness({ token, setPage }) {
         </div>
       )}
 
-      {/* BANNER 4: NO FACE DETECTED (Model is ready, camera is active, but face not yet centered in frame) (Requirement 14) */}
+      {/* BANNER 4: NO FACE DETECTED (Model is ready, camera is active, but face not yet centered in frame) */}
       {cameraStatus === 'active' && modelStatus === 'ready' && !faceDetected && (
         <div style={{
           background: '#fef3c7',
@@ -1249,11 +1387,15 @@ export default function HeartCameraWellness({ token, setPage }) {
           fontSize: 14
         }}>
           <UserX size={20} />
-          <span>No face detected. Please position your face in the center of the camera with adequate lighting.</span>
+          <span>
+            {sessionActive
+              ? 'No face detected during screening. Please position your face in the center of the camera.'
+              : 'No face detected. Please position your face in the center of the camera with adequate lighting.'}
+          </span>
         </div>
       )}
 
-      {/* BANNER 5: FACE DETECTED & TRACKING ACTIVE (Requirement 13) */}
+      {/* BANNER 5: FACE DETECTED & TRACKING ACTIVE */}
       {cameraStatus === 'active' && faceDetected && (
         <div style={{
           background: '#ecfdf5',
@@ -1275,8 +1417,8 @@ export default function HeartCameraWellness({ token, setPage }) {
           </div>
           <div style={{ display: 'flex', gap: 14, fontSize: 12, color: '#047857' }}>
             <span><strong>Tracking:</strong> Active</span>
-            <span><strong>Processing:</strong> 30 FPS Live</span>
-            <span><strong>Signal Quality:</strong> {signalQuality}</span>
+            <span><strong>Processing:</strong> {sessionActive ? 'Screening Active (30 FPS)' : 'Preview (Screening not started)'}</span>
+            <span><strong>Signal Quality:</strong> {sessionActive ? signalQuality : 'Ready'}</span>
           </div>
         </div>
       )}
@@ -1410,7 +1552,7 @@ export default function HeartCameraWellness({ token, setPage }) {
                 padding: '5px 10px',
                 borderRadius: 6,
                 fontSize: 12,
-                color: faceDetected && sqiScore >= 60 ? '#10b981' : modelStatus === 'loading' ? '#38bdf8' : '#f59e0b',
+                color: !sessionActive ? '#38bdf8' : faceDetected && sqiScore >= 60 ? '#10b981' : modelStatus === 'loading' ? '#38bdf8' : '#f59e0b',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
@@ -1420,9 +1562,11 @@ export default function HeartCameraWellness({ token, setPage }) {
                 <span>
                   {modelStatus === 'loading'
                     ? 'Initializing Face AI...'
-                    : faceDetected
-                    ? `Signal Quality: ${signalQuality}`
-                    : 'Signal Quality: No face detected'}
+                    : !faceDetected
+                    ? 'Signal Quality: No face detected'
+                    : !sessionActive
+                    ? 'Camera Preview: Face Tracked (Screening not started)'
+                    : `Signal Quality: ${signalQuality}`}
                 </span>
               </div>
             )}
@@ -1438,7 +1582,15 @@ export default function HeartCameraWellness({ token, setPage }) {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#10b981', marginBottom: 2 }}>
                 <span>Photoplethysmogram (rPPG Pulse Wave)</span>
-                <span>{estimatedBpm !== null ? `${estimatedBpm} BPM` : 'No live pulse signal'}</span>
+                <span>
+                  {!sessionActive
+                    ? (screeningStatus === 'completed' && completedReport ? `${completedReport.heart_rate_bpm} BPM (Verified)` : 'Screening not started')
+                    : !faceDetected
+                    ? 'No face detected (Paused)'
+                    : estimatedBpm !== null
+                    ? `${estimatedBpm} BPM`
+                    : 'Acquiring pulse signal...'}
+                </span>
               </div>
               <canvas ref={pulseCanvasRef} width={450} height={50} style={{ width: '100%', height: 45 }} />
             </div>
@@ -1458,79 +1610,174 @@ export default function HeartCameraWellness({ token, setPage }) {
           )}
 
           <div style={{ marginTop: 16 }}>
-            <button
-              className="primary full"
-              disabled={sessionActive || cameraStatus !== 'active' || !faceDetected || modelStatus !== 'ready'}
-              onClick={startFullScreening}
-              style={{
-                background: sessionActive ? '#095e69' : (!faceDetected || cameraStatus !== 'active' || modelStatus !== 'ready') ? '#64748b' : '#10b981',
-                borderColor: (!faceDetected || cameraStatus !== 'active' || modelStatus !== 'ready') ? '#64748b' : '#10b981',
-                padding: '11px 16px',
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: (!faceDetected || cameraStatus !== 'active' || modelStatus !== 'ready') ? 'not-allowed' : 'pointer'
-              }}
-            >
-              {sessionActive ? (
-                <>Screening Patient Biometrics ({20 - sessionSeconds}s remaining)...</>
-              ) : cameraStatus !== 'active' ? (
-                <>Camera Not Connected</>
-              ) : modelStatus === 'loading' ? (
-                <><RefreshCw size={15} style={{ animation: 'spin 1.5s linear infinite', marginRight: 6 }} /> Initializing Face AI Model...</>
-              ) : !faceDetected ? (
-                <>Position Face in Front of Camera to Start</>
-              ) : (
-                <><Play size={16} /> Start 20s Verified Screening</>
-              )}
-            </button>
+            {sessionActive ? (
+              <button
+                className="table-btn full"
+                onClick={stopScreening}
+                style={{
+                  background: '#dc2626',
+                  color: '#fff',
+                  borderColor: '#b91c1c',
+                  padding: '11px 16px',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8
+                }}
+              >
+                <Square size={16} /> Stop Screening ({20 - sessionSeconds}s remaining)
+              </button>
+            ) : (
+              <button
+                className="primary full"
+                disabled={cameraStatus !== 'active' || !faceDetected || modelStatus !== 'ready'}
+                onClick={startFullScreening}
+                style={{
+                  background: (!faceDetected || cameraStatus !== 'active' || modelStatus !== 'ready') ? '#64748b' : '#10b981',
+                  borderColor: (!faceDetected || cameraStatus !== 'active' || modelStatus !== 'ready') ? '#64748b' : '#10b981',
+                  padding: '11px 16px',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: (!faceDetected || cameraStatus !== 'active' || modelStatus !== 'ready') ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8
+                }}
+              >
+                {cameraStatus !== 'active' ? (
+                  <>Camera Not Connected</>
+                ) : modelStatus === 'loading' ? (
+                  <><RefreshCw size={15} style={{ animation: 'spin 1.5s linear infinite', marginRight: 6 }} /> Initializing Face AI Model...</>
+                ) : !faceDetected ? (
+                  <>Position Face in Front of Camera to Start</>
+                ) : (
+                  <><Play size={16} /> Start Verified Screening</>
+                )}
+              </button>
+            )}
           </div>
         </div>
 
         {/* RIGHT COLUMN: REAL-TIME BIOMETRIC METRICS (NO HARDCODED/FABRICATED NUMBERS) */}
         <div>
           <div style={{ background: '#fff', border: '1px solid var(--border-light)', borderRadius: 16, padding: 20, marginBottom: 18 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <h3 style={{ margin: 0, fontSize: 16, color: '#102d42' }}>Live Physiological Estimates</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16, color: '#102d42' }}>Physiological & Biometric Screening</h3>
+                <div style={{ fontSize: 12, color: sessionActive ? '#10b981' : '#64748b', fontWeight: 600, marginTop: 2 }}>
+                  Status: {
+                    screeningStatus === 'screening'
+                      ? (!faceDetected ? 'Screening paused — No face detected' : `Screening in progress (${20 - sessionSeconds}s remaining)`)
+                      : screeningStatus === 'completed'
+                      ? 'Screening completed & verified'
+                      : screeningStatus === 'stopped'
+                      ? 'Screening stopped by user'
+                      : screeningStatus === 'failed'
+                      ? 'Screening failed'
+                      : 'Screening not started'
+                  }
+                </div>
+              </div>
               <span style={{
-                background: sqiScore >= 60 ? '#e6f7ef' : '#fef3c7',
-                color: sqiScore >= 60 ? '#10b981' : '#b45309',
+                background: !sessionActive && screeningStatus !== 'completed' ? '#f1f5f9' : (sqiScore >= 60 ? '#e6f7ef' : '#fef3c7'),
+                color: !sessionActive && screeningStatus !== 'completed' ? '#64748b' : (sqiScore >= 60 ? '#10b981' : '#b45309'),
                 padding: '4px 10px',
                 borderRadius: 20,
                 fontSize: 12,
                 fontWeight: 600
               }}>
-                Pulse SQI: {faceDetected ? `${sqiScore}%` : 'Not available'}
+                Pulse SQI: {
+                  !sessionActive && screeningStatus !== 'completed'
+                    ? (cameraStatus === 'active' && faceDetected ? 'Ready (Face Tracked)' : 'Screening not started')
+                    : !faceDetected
+                    ? 'No face detected'
+                    : `${sqiScore}%`
+                }
               </span>
             </div>
 
             <div className="wellness-metrics-row">
               <div className="wellness-metric-card">
                 <small>Estimated Heart Rate</small>
-                <div className="val" style={{ color: abnormalityAlert ? '#dc2626' : '#0d7482' }}>
-                  {estimatedBpm !== null ? estimatedBpm : '--'}
+                <div className="val" style={{
+                  color: (!sessionActive && screeningStatus !== 'completed') ? '#94a3b8' : (!faceDetected && sessionActive) ? '#f59e0b' : abnormalityAlert ? '#dc2626' : '#0d7482',
+                  fontSize: ((!sessionActive && screeningStatus !== 'completed') || (!faceDetected && sessionActive) || estimatedBpm === null) ? 15 : 28,
+                  paddingTop: ((!sessionActive && screeningStatus !== 'completed') || (!faceDetected && sessionActive) || estimatedBpm === null) ? 8 : 0
+                }}>
+                  {screeningStatus === 'completed' && completedReport
+                    ? completedReport.heart_rate_bpm
+                    : sessionActive
+                    ? (!faceDetected ? 'No face detected' : estimatedBpm !== null ? estimatedBpm : 'Acquiring pulse...')
+                    : screeningStatus === 'stopped'
+                    ? 'Screening stopped'
+                    : screeningStatus === 'failed'
+                    ? 'Screening failed'
+                    : '--'}
                 </div>
                 <div className="unit">
-                  {estimatedBpm !== null ? 'BPM (Live rPPG)' : 'Not available'}
+                  {screeningStatus === 'completed' && completedReport
+                    ? 'BPM (Verified)'
+                    : sessionActive
+                    ? (!faceDetected ? 'Signal interrupted' : estimatedBpm !== null ? 'BPM (Live rPPG)' : 'Measuring...')
+                    : 'Screening not started'}
                 </div>
               </div>
 
               <div className="wellness-metric-card">
                 <small>Heart Rate Variability</small>
-                <div className="val" style={{ color: hrvRmssd ? '#10b981' : '#64748b', fontSize: hrvRmssd ? 24 : 14, paddingTop: hrvRmssd ? 0 : 6 }}>
-                  {hrvRmssd ? `${hrvRmssd} ms` : 'Not available'}
+                <div className="val" style={{
+                  color: ((!sessionActive && screeningStatus !== 'completed') || (!faceDetected && sessionActive)) ? '#94a3b8' : hrvRmssd ? '#10b981' : '#64748b',
+                  fontSize: 14,
+                  paddingTop: 8
+                }}>
+                  {screeningStatus === 'completed' && completedReport
+                    ? (completedReport.hrv_rmssd_ms ? `${completedReport.hrv_rmssd_ms} ms` : 'Not available')
+                    : sessionActive
+                    ? (!faceDetected ? 'No face detected' : hrvRmssd ? `${hrvRmssd} ms` : 'Analyzing intervals...')
+                    : screeningStatus === 'stopped'
+                    ? 'Screening stopped'
+                    : screeningStatus === 'failed'
+                    ? 'Screening failed'
+                    : '--'}
                 </div>
                 <div className="unit" style={{ fontSize: 11 }}>
-                  {hrvRmssd ? 'RMSSD Parasympathetic' : 'Not available'}
+                  {screeningStatus === 'completed' && completedReport && completedReport.hrv_rmssd_ms
+                    ? 'RMSSD Parasympathetic'
+                    : sessionActive && faceDetected && hrvRmssd
+                    ? 'RMSSD Parasympathetic'
+                    : sessionActive && !faceDetected
+                    ? 'Signal interrupted'
+                    : 'Screening not started'}
                 </div>
               </div>
 
               <div className="wellness-metric-card">
                 <small>Autonomic Stress</small>
-                <div className="val" style={{ color: stressIndex && stressIndex > 65 ? '#dc2626' : stressIndex && stressIndex > 45 ? '#d97706' : '#10b981' }}>
-                  {stressIndex !== null ? stressIndex : '--'}
+                <div className="val" style={{
+                  color: ((!sessionActive && screeningStatus !== 'completed') || (!faceDetected && sessionActive)) ? '#94a3b8' : stressIndex && stressIndex > 65 ? '#dc2626' : stressIndex && stressIndex > 45 ? '#d97706' : '#10b981',
+                  fontSize: ((!sessionActive && screeningStatus !== 'completed') || (!faceDetected && sessionActive) || stressIndex === null) ? 15 : 28,
+                  paddingTop: ((!sessionActive && screeningStatus !== 'completed') || (!faceDetected && sessionActive) || stressIndex === null) ? 8 : 0
+                }}>
+                  {screeningStatus === 'completed' && completedReport
+                    ? (completedReport.stress_index !== null ? completedReport.stress_index : '--')
+                    : sessionActive
+                    ? (!faceDetected ? 'No face detected' : stressIndex !== null ? stressIndex : 'Evaluating...')
+                    : screeningStatus === 'stopped'
+                    ? 'Screening stopped'
+                    : screeningStatus === 'failed'
+                    ? 'Screening failed'
+                    : '--'}
                 </div>
                 <div className="unit">
-                  {stressLevel !== null ? stressLevel : 'Not available'}
+                  {screeningStatus === 'completed' && completedReport
+                    ? (completedReport.stress_level || 'Not available')
+                    : sessionActive
+                    ? (!faceDetected ? 'Signal interrupted' : stressLevel || 'Analyzing...')
+                    : 'Screening not started'}
                 </div>
               </div>
             </div>
@@ -1540,11 +1787,15 @@ export default function HeartCameraWellness({ token, setPage }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b', marginBottom: 6 }}>
                 <span>Heart Rate Trend</span>
                 <span>
-                  {bpmTrend.length > 0 ? `Range: ${Math.min(...bpmTrend)} - ${Math.max(...bpmTrend)} BPM` : 'No trend recorded'}
+                  {sessionActive && bpmTrend.length > 0
+                    ? `Range: ${Math.min(...bpmTrend)} - ${Math.max(...bpmTrend)} BPM`
+                    : screeningStatus === 'completed' && bpmTrend.length > 0
+                    ? `Range: ${Math.min(...bpmTrend)} - ${Math.max(...bpmTrend)} BPM`
+                    : 'Screening not started'}
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 40 }}>
-                {bpmTrend.length > 0 ? (
+                {(sessionActive || screeningStatus === 'completed') && bpmTrend.length > 0 ? (
                   bpmTrend.map((val, idx) => {
                     const hPct = Math.max(15, Math.min(100, ((val - 50) / 70) * 100));
                     return (
@@ -1562,7 +1813,13 @@ export default function HeartCameraWellness({ token, setPage }) {
                   })
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', color: '#94a3b8', fontSize: 12 }}>
-                    Trend will display once live camera data is processed
+                    {sessionActive
+                      ? (!faceDetected ? 'No face detected — Trend paused' : 'Recording trend from live pulse...')
+                      : screeningStatus === 'stopped'
+                      ? 'Screening stopped'
+                      : screeningStatus === 'failed'
+                      ? 'Screening failed'
+                      : 'Trend will display once screening is started'}
                   </div>
                 )}
               </div>
@@ -1577,24 +1834,48 @@ export default function HeartCameraWellness({ token, setPage }) {
                 <div style={{ background: '#f8fafc', padding: 10, borderRadius: 8, border: '1px solid #e2e8f0', textAlign: 'center' }}>
                   <Smile size={18} style={{ color: '#0d7482', margin: '0 auto 4px auto' }} />
                   <div style={{ fontSize: 11, color: '#64748b' }}>Expression</div>
-                  <b style={{ fontSize: 13, color: '#1e293b' }}>
-                    {facialExpression || 'Not available'}
+                  <b style={{ fontSize: 13, color: (!sessionActive && screeningStatus !== 'completed') ? '#94a3b8' : '#1e293b' }}>
+                    {screeningStatus === 'completed' && completedReport
+                      ? (completedReport.facial_expression || 'Not available')
+                      : sessionActive
+                      ? (!faceDetected ? 'No face detected' : facialExpression || 'Analyzing...')
+                      : screeningStatus === 'stopped'
+                      ? 'Screening stopped'
+                      : screeningStatus === 'failed'
+                      ? 'Screening failed'
+                      : 'Screening not started'}
                   </b>
                 </div>
 
                 <div style={{ background: '#f8fafc', padding: 10, borderRadius: 8, border: '1px solid #e2e8f0', textAlign: 'center' }}>
                   <Eye size={18} style={{ color: ear && ear < 0.22 ? '#dc2626' : '#10b981', margin: '0 auto 4px auto' }} />
                   <div style={{ fontSize: 11, color: '#64748b' }}>Eye Aspect (EAR)</div>
-                  <b style={{ fontSize: 13, color: '#1e293b' }}>
-                    {ear !== null ? `${ear.toFixed(2)} (${blinkCount} blinks)` : 'Not available'}
+                  <b style={{ fontSize: 13, color: (!sessionActive && screeningStatus !== 'completed') ? '#94a3b8' : '#1e293b' }}>
+                    {screeningStatus === 'completed' && completedReport
+                      ? `${completedReport.details?.ear || 'Not available'} (${completedReport.details?.blink_rate || `${blinkCount} blinks`})`
+                      : sessionActive
+                      ? (!faceDetected ? 'No face detected' : ear !== null ? `${ear.toFixed(2)} (${blinkCount} blinks)` : 'Analyzing...')
+                      : screeningStatus === 'stopped'
+                      ? 'Screening stopped'
+                      : screeningStatus === 'failed'
+                      ? 'Screening failed'
+                      : 'Screening not started'}
                   </b>
                 </div>
 
                 <div style={{ background: '#f8fafc', padding: 10, borderRadius: 8, border: '1px solid #e2e8f0', textAlign: 'center' }}>
                   <Moon size={18} style={{ color: yawnCount > 0 ? '#f59e0b' : '#0d7482', margin: '0 auto 4px auto' }} />
                   <div style={{ fontSize: 11, color: '#64748b' }}>Fatigue Status</div>
-                  <b style={{ fontSize: 13, color: '#1e293b' }}>
-                    {fatigueLevel || 'Not available'}
+                  <b style={{ fontSize: 13, color: (!sessionActive && screeningStatus !== 'completed') ? '#94a3b8' : '#1e293b' }}>
+                    {screeningStatus === 'completed' && completedReport
+                      ? (completedReport.fatigue_level || 'Not available')
+                      : sessionActive
+                      ? (!faceDetected ? 'No face detected' : fatigueLevel || 'Analyzing...')
+                      : screeningStatus === 'stopped'
+                      ? 'Screening stopped'
+                      : screeningStatus === 'failed'
+                      ? 'Screening failed'
+                      : 'Screening not started'}
                   </b>
                 </div>
               </div>

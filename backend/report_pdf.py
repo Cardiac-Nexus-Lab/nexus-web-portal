@@ -400,12 +400,12 @@ def build_wellness_report_pdf(data: dict) -> bytes:
     patient_id = data.get("patient_id") or "N/A"
     hr = data.get("heart_rate_bpm") or data.get("heartRate") or 0.0
     hrv = data.get("hrv_rmssd_ms") or data.get("hrv")
-    stress_idx = data.get("stress_index") or data.get("stressIndex") or 0
-    stress_lvl = data.get("stress_level") or data.get("stressLevel") or "Balanced"
-    sqi = data.get("signal_quality") or "Good (78%)"
-    fatigue_lvl = data.get("fatigue_level") or "Alert & Attentive"
-    sleep_lvl = data.get("sleepiness_level") or "Awake"
-    expression = data.get("facial_expression") or "Neutral"
+    stress_idx = data.get("stress_index") if data.get("stress_index") is not None else "--"
+    stress_lvl = data.get("stress_level") or "Not available"
+    sqi = data.get("signal_quality") or "Not available"
+    fatigue_lvl = data.get("fatigue_level") or "Not available"
+    sleep_lvl = data.get("sleepiness_level") or "Not available"
+    expression = data.get("facial_expression") or "Not available"
 
     # Abnormality check
     abnormality = "Normal Sinus Range"
@@ -450,10 +450,10 @@ def build_wellness_report_pdf(data: dict) -> bytes:
     # Section 3: Facial Expression, Fatigue & Sleepiness
     story += [_p("3. Facial Action, Fatigue & Sleepiness Indicators", "h2")]
     details = data.get("details") or {}
-    ear_val = details.get("ear", "0.28")
-    blink_rate = details.get("blink_rate", "16 / min")
-    perclos = details.get("perclos", "4.2%")
-    yawn_count = details.get("yawns", "0")
+    ear_val = details.get("ear") or "Not available"
+    blink_rate = details.get("blink_rate") or "Not available"
+    perclos = details.get("perclos") or "Not available"
+    yawn_count = details.get("yawns") or "0"
 
     face_rows = [
         ["Physiological / Neuromuscular Indicator", "Observed State", "Reference / Normative Range"],
