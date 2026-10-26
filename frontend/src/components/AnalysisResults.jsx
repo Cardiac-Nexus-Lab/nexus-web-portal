@@ -105,7 +105,7 @@ function FusionResult({ fusion }) {
                   <span>On its own: {fusionPct(m.alone)} · attention {m.weight.toFixed(2)}</span>
                   {m.finding && <em>{m.finding}</em>}
                 </>
-              ) : <span>Not given</span>}
+              ) : <span>{m.finding ? `Not used: ${m.finding}` : 'Not given'}</span>}
             </div>
           );
         })}

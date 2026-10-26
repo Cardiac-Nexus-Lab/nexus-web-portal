@@ -288,7 +288,11 @@ def build_report_pdf(result: dict) -> bytes:
             if not m["used"]:
                 rows.append([_p(m["name"], "cellb"), _p("not given", "cell"), _p("-", "cell"), _p("-", "cell")])
                 continue
-            effect = f"{100 * m['effect']:+.0f} points" if "effect" in m else "only input"
+            if "effect" in m:
+                n = round(100 * m["effect"])
+                effect = f"{n:+d} point" + ("" if abs(n) == 1 else "s")
+            else:
+                effect = "only input"
             finding = f"{m['finding']}; on its own {percent(m['alone'])}" if m.get("finding") else f"on its own {percent(m['alone'])}"
             rows.append([_p(m["name"], "cellb"), _p(finding, "cell"),
                          _p(f"{m['weight']:.2f}", "cell"), _p(effect, "cell")])

@@ -80,7 +80,9 @@ DIAGNOSIS_LABELS = {
 }
 MODEL_EVIDENCE = {
     "ecg": "Tested on 2,158 unseen PTB-XL recordings: macro AUROC 0.911, calibrated (mean ECE 0.015).",
-    "ecg_image": "Digitizer recovers the waveform at 0.94 correlation from flat scans; angled photos are unreliable.",
+    "ecg_image": ("Digitizer: 0.94 correlation with the true waveform on synthetic flat 12x1 printouts, but it does "
+                  "not yet read real photos or scans (0.00 on 63 real 12x1 images, PM-ECG-ID); treat image results "
+                  "with caution."),
     "mri": ("Tested on 346 unseen patients from three cohorts and several scanner vendors: left ventricle Dice "
             "0.937-0.954, ejection fraction error 3-4 points against experts; 5.7 points against clinicians on "
             "439 external Kaggle patients."),
@@ -1013,8 +1015,12 @@ def _mri_phrase(mri: dict) -> str | None:
     if "diagnosis" in mri:
         top = mri["diagnosis"]["probabilities"][0]
         return f"most like {top['label'].lower()}"
-    ef = mri.get("measurements", {}).get("lv_ejection_fraction")
-    return f"left ventricular ejection fraction {ef:.0f}%" if ef is not None else None
+    measurements = mri.get("measurements", {})
+    if "lv_ejection_fraction" in measurements:
+        return f"left ventricular ejection fraction {measurements['lv_ejection_fraction']:.0f}%"
+    if "lv_volume_ml" in measurements:
+        return f"one frame, left ventricle {measurements['lv_volume_ml']:.0f} mL"
+    return None
 
 
 def fuse(ecg: dict, mri: dict, clinical: dict) -> dict | None:
@@ -1040,7 +1046,8 @@ def fuse(ecg: dict, mri: dict, clinical: dict) -> dict | None:
         "level": "high" if p >= 0.7 else "moderate" if p >= 0.4 else "low",
         "modalities": [
             {"key": key, "name": names[key][0].upper() + names[key][1:], "used": key in result["modalities"],
-             "finding": findings.get(key),
+             "finding": findings.get(key) if key in result["modalities"] else
+                        ("uploaded, but a 2D slice cannot be measured" if key == "mri" else None),
              **{k: round(v, 4) for k, v in result["modalities"].get(key, {}).items()}}
             for key in fusion_model.MODALITIES],
         "clinical_fields": [{"name": f["name"], "points": round(f["points"], 1)}
