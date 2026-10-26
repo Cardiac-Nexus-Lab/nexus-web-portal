@@ -358,3 +358,147 @@ def build_report_pdf(result: dict) -> bytes:
     doc.build(story, canvasmaker=lambda *a, **k: _NumberedCanvas(
         *a, analysis_id=result.get("id", ""), generated=generated, **k))
     return buffer.getvalue()
+
+
+def build_wellness_report_pdf(data: dict) -> bytes:
+    """Builds a formatted A4 PDF for a Camera Detection & Cardiac Wellness Screening."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=14 * mm, rightMargin=14 * mm,
+        topMargin=22 * mm, bottomMargin=16 * mm
+    )
+    full = doc.width
+    generated = datetime.now().strftime("%d %b %Y, %H:%M")
+    screening_id = str(data.get("id") or data.get("screening_id") or f"WLN-{datetime.now():%Y%m%d%H%M}")
+
+    story = []
+
+    # Title & Subtitle
+    story += [
+        Paragraph("Cardiac Wellness & Optical Biometric Report", STYLES["title"]),
+        _p("Contactless Camera-Based rPPG Pulse Monitoring, Facial Expression & Sleepiness Assessment", "small"),
+        Spacer(1, 3 * mm),
+    ]
+
+    # Prominent Medical Disclaimer Box
+    disclaimer_text = (
+        "<b>IMPORTANT MEDICAL LIMITATIONS NOTICE:</b> Camera-based results are estimates, not medical diagnoses. "
+        "Blood pressure and heart disease cannot be reliably detected using a normal camera alone. "
+        "HRV requires accurate pulse interval data. This assessment does not substitute for clinical ECG, MRI, "
+        "or diagnostic cardiology examinations."
+    )
+    notice_table = Table([[_p(disclaimer_text, "note")]], colWidths=[full])
+    notice_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fff8e7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#e0a838")),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story += [notice_table, Spacer(1, 3.5 * mm)]
+
+    # Section 1: Patient & Session Identification
+    patient_name = data.get("patient_name") or data.get("name") or "Unspecified Patient"
+    patient_id = data.get("patient_id") or "N/A"
+    hr = data.get("heart_rate_bpm") or data.get("heartRate") or 0.0
+    hrv = data.get("hrv_rmssd_ms") or data.get("hrv")
+    stress_idx = data.get("stress_index") if data.get("stress_index") is not None else "--"
+    stress_lvl = data.get("stress_level") or "Not available"
+    sqi = data.get("signal_quality") or "Not available"
+    fatigue_lvl = data.get("fatigue_level") or "Not available"
+    sleep_lvl = data.get("sleepiness_level") or "Not available"
+    expression = data.get("facial_expression") or "Not available"
+
+    # Abnormality check
+    abnormality = "Normal Sinus Range"
+    abnormality_color = "#237650"
+    if hr > 100:
+        abnormality = "Tachycardia Alert: Elevated Heart Rate (>100 BPM)"
+        abnormality_color = "#c6394b"
+    elif hr > 0 and hr < 50:
+        abnormality = "Bradycardia Alert: Unusually Low Heart Rate (<50 BPM)"
+        abnormality_color = "#b87400"
+
+    story += [_p("1. Session & Patient Identification", "h2")]
+    meta_rows = [
+        ["Patient Name", patient_name, "Patient Record ID", patient_id],
+        ["Screening ID", screening_id, "Session Timestamp", generated],
+    ]
+    meta_table = Table(
+        [[_p(c, "cellb" if j % 2 == 0 else "cell") for j, c in enumerate(row)] for row in meta_rows],
+        colWidths=[36 * mm, 55 * mm, 38 * mm, full - 129 * mm]
+    )
+    meta_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), TINT),
+        ("BOX", (0, 0), (-1, -1), 0.4, RULE),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, RULE),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story += [meta_table, Spacer(1, 3.5 * mm)]
+
+    # Section 2: Physiological rPPG & Cardiac Wellness Metrics
+    story += [_p("2. Camera-Based Physiological & rPPG Metrics", "h2")]
+    hrv_display = f"{round(float(hrv), 1)} ms (RMSSD)" if (hrv is not None and str(hrv) != "None") else "Insufficient pulse interval stability"
+    bio_rows = [
+        ["Biometric Parameter", "Estimated Value", "Clinical Interpretation & Guidelines"],
+        [_p("Estimated Heart Rate", "cellb"), _p(f"{round(float(hr), 1)} BPM", "cellb"), _p(abnormality, "cell")],
+        [_p("Pulse Signal Quality (SQI)", "cellb"), _p(str(sqi), "cellb"), _p("Optical pulse signal-to-noise & motion stability ratio", "cell")],
+        [_p("Heart Rate Variability (HRV)", "cellb"), _p(hrv_display, "cellb"), _p("Parasympathetic autonomic vagal regulation tone", "cell")],
+        [_p("Autonomic Stress Index", "cellb"), _p(f"{stress_idx} / 100 ({stress_lvl})", "cellb"), _p("Sympathetic/Parasympathetic autonomic balance score", "cell")],
+    ]
+    story += [_table(bio_rows, [55 * mm, 45 * mm, full - 100 * mm]), Spacer(1, 3.5 * mm)]
+
+    # Section 3: Facial Expression, Fatigue & Sleepiness
+    story += [_p("3. Facial Action, Fatigue & Sleepiness Indicators", "h2")]
+    details = data.get("details") or {}
+    ear_val = details.get("ear") or "Not available"
+    blink_rate = details.get("blink_rate") or "Not available"
+    perclos = details.get("perclos") or "Not available"
+    yawn_count = details.get("yawns") or "0"
+
+    face_rows = [
+        ["Physiological / Neuromuscular Indicator", "Observed State", "Reference / Normative Range"],
+        [_p("Facial Expression State", "cellb"), _p(str(expression), "cellb"), _p("MediaPipe Facial Action Units geometric muscle tension", "cell")],
+        [_p("Fatigue Assessment Level", "cellb"), _p(str(fatigue_lvl), "cellb"), _p("Composite score: facial mobility + eyelid dynamics", "cell")],
+        [_p("Sleepiness / Drowsiness State", "cellb"), _p(str(sleep_lvl), "cellb"), _p("Temporal eye closure & yawn frequency analysis", "cell")],
+        [_p("Eye Aspect Ratio (EAR)", "cellb"), _p(str(ear_val), "cell"), _p("Normal open eye: 0.25 - 0.35 · Drowsy closure: < 0.21", "cell")],
+        [_p("Spontaneous Blink Frequency", "cellb"), _p(str(blink_rate), "cell"), _p("Normal baseline: 12 - 20 blinks per minute", "cell")],
+        [_p("Eye Closure Duration (PERCLOS)", "cellb"), _p(str(perclos), "cell"), _p("Alert: < 8% · Drowsiness threshold: > 12%", "cell")],
+        [_p("Detected Yawn Frequency", "cellb"), _p(f"{yawn_count} yawns", "cell"), _p("Mouth Aspect Ratio (MAR) sustained opening > 0.52", "cell")],
+    ]
+    story += [_table(face_rows, [65 * mm, 42 * mm, full - 107 * mm]), Spacer(1, 3.5 * mm)]
+
+    # Section 4: Clinical Guidance Notes
+    story += [_p("4. Autonomic Stabilization & Clinical Guidance", "h2")]
+    notes = data.get("guidance_notes") or (
+        "Autonomic balance is within resilient range. To optimize vagal tone and heart rate variability, "
+        "practice 5 minutes of 4-4-4-4 Box Breathing (Inhale 4s, Hold 4s, Exhale 4s, Hold 4s). Maintain hydration "
+        "and avoid excessive caffeine."
+    )
+    guidance_table = Table([[_p(notes, "body")]], colWidths=[full])
+    guidance_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f0f8f9")),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#bce2e6")),
+        ("PADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story += [guidance_table, Spacer(1, 5 * mm)]
+
+    # Section 5: Review Signatures
+    sign = Table([
+        [_p("Reviewed by (Technician / Clinician)", "label"), _p("Clinical Signature", "label"), _p("Verification Date", "label")],
+        ["", "", ""]
+    ], colWidths=[full / 3] * 3, rowHeights=[5 * mm, 12 * mm])
+    sign.setStyle(TableStyle([
+        ("LINEBELOW", (0, 1), (-1, 1), 0.6, MUTED),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10)
+    ]))
+    story += [KeepTogether([sign])]
+
+    doc.build(story, canvasmaker=lambda *a, **k: _NumberedCanvas(
+        *a, analysis_id=screening_id, generated=generated, **k))
+    return buffer.getvalue()
+

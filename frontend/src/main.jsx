@@ -228,6 +228,30 @@ function App() {
         const providerId = firebaseUser.providerData?.[0]?.providerId || 'password';
         const isGoogle = providerId === 'google.com';
 
+        // Check if email/password user is verified
+        if (!isGoogle && !firebaseUser.emailVerified) {
+          // Check backend status in case verified via OTP/link
+          let backendVerified = false;
+          try {
+            const stResp = await fetch(`/api/auth/check-email-status?email=${encodeURIComponent(firebaseUser.email)}`);
+            if (stResp.ok) {
+              const stData = await stResp.json();
+              if (stData.is_verified) {
+                backendVerified = true;
+              }
+            }
+          } catch (e) {}
+
+          if (!backendVerified) {
+            // Strictly unverified: sign out of Firebase and keep on auth/landing view
+            try { await signOut(auth); } catch (e) {}
+            setUser(null);
+            setToken(null);
+            if (view === 'dashboard') setView('auth');
+            return;
+          }
+        }
+
         const userData = {
           id: firebaseUser.uid,
           firebase_uid: firebaseUser.uid,
@@ -254,9 +278,25 @@ function App() {
             setUser({ ...userData, ...synced.user });
             if (window.location.hash !== TEAM_HASH) setView('dashboard');
             return;
+          } else if (resp.status === 403) {
+            // Unverified user: sign out and block dashboard access
+            try { await signOut(auth); } catch (e) {}
+            setUser(null);
+            setToken(null);
+            if (view === 'dashboard') setView('auth');
+            return;
           }
         } catch (e) {
-          console.log("Backend sync offline, using active Firebase user session.");
+          console.log("Backend sync offline or verifying.");
+        }
+
+        // Enforce email verification: Google sign-in is inherently verified; email/password must be verified
+        if (!isGoogle && !firebaseUser.emailVerified) {
+          try { await signOut(auth); } catch (e) {}
+          setUser(null);
+          setToken(null);
+          if (view === 'dashboard') setView('auth');
+          return;
         }
 
         setUser(userData);

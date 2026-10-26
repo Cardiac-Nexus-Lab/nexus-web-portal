@@ -1,0 +1,4 @@
+profile_code,name,age,gender,blood_pressure,cholesterol,chest_pain,max_heart_rate,exercise_angina,height_cm,weight_kg,companion_ecg,companion_mri_ed,companion_mri_es
+LOW_RISK,Sarah Miller,47,Female,118,178,None,164,No,170.0,64.0,ecg_norm_ptbxl_93.csv,mri_patient128_ed.nii.gz,mri_patient128_es.nii.gz
+MODERATE_RISK,Alexander Hayes,52,Male,142,220,Atypical angina,145,Yes,180.0,74.0,ecg_sttc_ptbxl_318.csv,mri_patient104_ed.nii.gz,mri_patient104_es.nii.gz
+HIGH_RISK,Robert Jenkins,62,Male,168,265,Typical angina,138,Yes,175.0,88.0,ecg_mi_ptbxl_514.csv,mri_patient103_ed.nii.gz,mri_patient103_es.nii.gz
