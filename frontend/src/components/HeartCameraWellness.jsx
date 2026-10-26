@@ -19,6 +19,7 @@ import {
   VideoOff,
   UserX
 } from 'lucide-react';
+import WellnessAssistant from './WellnessAssistant';
 
 // Euclidean distance helper
 function dist(p1, p2, w = 1, h = 1) {
@@ -160,6 +161,7 @@ export default function HeartCameraWellness({ token, setPage }) {
   const screeningIntervalRef = useRef(null);
   const faceDetectedRef = useRef(false);
   const roiCanvasRef = useRef(null);
+  const modelMoodRef = useRef(null); // mood from the pretrained expression model (WellnessAssistant)
 
   // Latest verified measurements cache (immune to stale React closures)
   const latestBiometricsRef = useRef({
@@ -729,7 +731,7 @@ export default function HeartCameraWellness({ token, setPage }) {
     }
 
     // Facial Expression Classification
-    const expression = classifyFacialExpression(landmarks, w, h);
+    const expression = modelMoodRef.current || classifyFacialExpression(landmarks, w, h);
     if (expression) {
       setFacialExpression(expression);
       latestBiometricsRef.current.facialExpression = expression;
@@ -1924,6 +1926,13 @@ export default function HeartCameraWellness({ token, setPage }) {
           )}
         </div>
       </div>
+
+      <WellnessAssistant
+        videoRef={videoRef}
+        cameraActive={cameraStatus === 'active'}
+        heartRate={estimatedBpm}
+        onMood={(m) => { modelMoodRef.current = m; }}
+      />
     </>
   );
 }
