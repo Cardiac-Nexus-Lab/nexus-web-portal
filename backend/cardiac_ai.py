@@ -150,10 +150,10 @@ TABLE_SUFFIXES = (".csv", ".txt")
 
 # Checks that an upload is an ECG at all. The classifier has no "not an ECG" answer, so without
 # them a logo or random numbers get a confident diagnosis. Thresholds were set by scoring the
-# 2,158 PTB-XL test recordings, 40 rendered printouts, angled phone captures and 60 unrelated images and photos.
+# 2,158 PTB-XL test recordings, 40 rendered printouts and 60 unrelated images and photos.
 LIMB_LEAD_MIN_TABLE = 0.9    # every real recording scored 1.00; random numbers 0.00
-LIMB_LEAD_MIN_IMAGE = 0.45   # calibrated to allow angled smartphone captures with slight perspective tilt
-LOW_CONFIDENCE_MAX_IMAGE = 0.42  # accommodates minor camera glare or focus falloff in mobile captures
+LIMB_LEAD_MIN_IMAGE = 0.6    # flat printouts scored 0.87 or more; unrelated images 0.47 or less
+LOW_CONFIDENCE_MAX_IMAGE = 0.3  # printouts had at most 22% of the trace read with low confidence
 COPIED_LEADS_MAX = 0.5       # real recordings had at most 9% of lead pairs near-identical
 
 
