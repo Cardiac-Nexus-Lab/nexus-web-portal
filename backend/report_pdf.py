@@ -283,13 +283,14 @@ def build_report_pdf(result: dict) -> bytes:
                   _p(f"ECG, MRI and health record together: {percent(fusion['probability'])} chance of "
                      f"{fusion['target']} ({fusion['level']})", "cellb")]
         story += [_p(line, "cell") for line in fusion["explanation"]["patient"]]
-        rows = [["Modality", "Its own finding", "Weight", "Effect on the result"]]
+        rows = [["Modality", "Its own finding", "Attention", "Effect on the result"]]
         for m in fusion["modalities"]:
             if not m["used"]:
                 rows.append([_p(m["name"], "cellb"), _p("not given", "cell"), _p("-", "cell"), _p("-", "cell")])
                 continue
             effect = f"{100 * m['effect']:+.0f} points" if "effect" in m else "only input"
-            rows.append([_p(m["name"], "cellb"), _p(m.get("finding") or "-", "cell"),
+            finding = f"{m['finding']}; on its own {percent(m['alone'])}" if m.get("finding") else f"on its own {percent(m['alone'])}"
+            rows.append([_p(m["name"], "cellb"), _p(finding, "cell"),
                          _p(f"{m['weight']:.2f}", "cell"), _p(effect, "cell")])
         story += [Spacer(1, 1.5 * mm), _table(rows, [30 * mm, full - 30 * mm - 52 * mm, 18 * mm, 34 * mm])]
         if fusion.get("mri_note"):

@@ -42,27 +42,27 @@ const modalitiesCardsData = [
   {
     icon: ClipboardList,
     frontTitle: 'Health Profile',
-    frontDescription: 'Blood pressure, cholesterol and symptoms checked against clinical guidelines.',
-    backTitle: 'Health Profile Check',
-    backContent: 'Compares each value with published clinical guidelines and explains every flag in words.',
+    frontDescription: 'Health-record values read by a neural network and checked against clinical guidelines.',
+    backTitle: 'Health Profile',
+    backContent: 'A neural network branch reads the health record for the fusion model, and each value is also checked against published guidelines, with every flag explained in words.',
     backDetails: [
       { label: 'Input', value: 'Age, sex, BP, cholesterol, max heart rate, symptoms' },
+      { label: 'Model', value: 'Neural network branch, trained on UCI Heart Disease' },
       { label: 'Guidelines', value: 'ACC/AHA 2017 (BP), NCEP ATP III (cholesterol)' },
-      { label: 'Method', value: 'Guideline rules, not a trained model' },
-      { label: 'Output', value: 'Risk flags: ok, moderate or high, with reasons' }
+      { label: 'Output', value: 'Values that mattered + risk flags with reasons' }
     ]
   },
   {
     icon: BrainCircuit,
-    frontTitle: 'Combined Summary',
-    frontDescription: 'All three results brought together into one attention level.',
-    backTitle: 'Multimodal Summary',
-    backContent: 'No public dataset has ECG, MRI and health records for the same patients, so the three results are combined by written rules shown with every result.',
+    frontTitle: 'Multimodal Fusion',
+    frontDescription: 'A deep learning network combines all three into one result, explained in words.',
+    backTitle: 'Deep Learning Fusion',
+    backContent: 'Each modality keeps its own trained network; attention layers and a learned gate combine them into one probability of heart disease, and every result says in plain words what each modality contributed.',
     backDetails: [
-      { label: 'ECG', value: 'Findings above set probability thresholds' },
-      { label: 'MRI', value: 'Ejection fraction and diagnosis' },
-      { label: 'Health', value: 'Guideline flags' },
-      { label: 'Output', value: 'Attention level Low / Moderate / High, with reasons' }
+      { label: 'Inputs', value: 'ECG embedding, MRI features and measurements, health record' },
+      { label: 'Model', value: 'Transformer attention fusion with a learned modality gate' },
+      { label: 'Explained by', value: 'Each modality\'s effect, Integrated Gradients, sentences' },
+      { label: 'Output', value: 'Probability of heart disease + attention level with reasons' }
     ]
   }
 ]
@@ -170,7 +170,7 @@ function Landing({ enter, signIn }) {
             <div className="eyebrow">SYSTEM ARCHITECTURE & TECHNOLOGY</div>
             <h2>Three analyses, each one explained.</h2>
             <p style={{ marginTop: 12 }}>
-              ECG recordings go to a 1D ResNet-18 trained on PTB-XL; paper printouts are first turned back into signals by a CNN trace digitizer. Cardiac MRI is outlined by a 2.5D U-Net trained on ACDC, M&Ms and M&Ms-2, and the outlines give chamber volumes, ejection fraction and a five-way diagnosis. Health values are checked against clinical guidelines. The three results are then combined by written rules into one attention level.
+              ECG recordings go to a 1D ResNet-18 trained on PTB-XL; paper printouts are first turned back into signals by a CNN trace digitizer. Cardiac MRI is outlined by a 2.5D U-Net trained on ACDC, M&Ms and M&Ms-2, and the outlines give chamber volumes, ejection fraction and a five-way diagnosis. The health record is read by its own neural network and checked against clinical guidelines. A deep learning fusion network then combines the three, and every result explains in plain words how much each one contributed.
             </p>
 
             <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -187,10 +187,10 @@ function Landing({ enter, signIn }) {
           <div className="arch-diagram">
             <span>ECG<br /><b>1D ResNet-18</b></span>
             <span>MRI<br /><b>2.5D U-Net</b></span>
-            <span>Health<br /><b>Guideline checks</b></span>
-            <strong>Rule-based multimodal summary</strong>
+            <span>Health<br /><b>Neural network</b></span>
+            <strong>Deep learning fusion: attention + learned gate</strong>
             <strong>Attention level (Low / Moderate / High)</strong>
-            <strong>Heat maps · outlines · reasons</strong>
+            <strong>Heat maps · outlines · explanations in words</strong>
           </div>
         </section>
 
@@ -201,7 +201,7 @@ function Landing({ enter, signIn }) {
             <div className="eyebrow">RESEARCH & CLINICAL GOVERNANCE</div>
             <h2>Responsible research by design.</h2>
             <p>
-              The models are trained and tested on public datasets: PTB-XL for ECG (21,388 recordings, with 2,158 held out for testing) and ACDC, M&Ms and M&Ms-2 for cardiac MRI (390 training and 346 test patients from several scanner vendors, plus 439 external Kaggle patients for ejection fraction). Every figure on this site is a held-out test result. Clinical validation, governance and privacy controls would be required before any real-world clinical use.
+              The models are trained and tested on public datasets: PTB-XL for ECG (21,388 recordings, with 2,158 held out for testing) ACDC, M&Ms and M&Ms-2 for cardiac MRI (390 training and 346 test patients from several scanner vendors, plus 439 external Kaggle patients for ejection fraction), and UCI Heart Disease for the health record (920 patients from four hospitals, tested again at a fifth). No public dataset has all three for the same people, so the fusion network is trained and tested on virtual patients that join records of different people with the same diagnosis. Every figure on this site is a held-out test result. Clinical validation, governance and privacy controls would be required before any real-world clinical use.
             </p>
           </div>
         </section>
