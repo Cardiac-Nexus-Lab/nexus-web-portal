@@ -29,7 +29,7 @@ function DemoNotice() {
 }
 
 // The stages the backend actually runs, in order.
-const steps = ['Reading the ECG (or digitizing a printout)', 'ECG classifier: five diagnostic findings', 'ECG explanation: Integrated Gradients', 'Segmenting the heart in the MRI', 'Measuring volumes and ejection fraction', 'MRI diagnosis from measurements', 'Checking clinical values against guidelines', 'Combining the results into a summary'];
+const steps = ['Reading the ECG (or digitizing a printout)', 'ECG classifier: five diagnostic findings', 'ECG explanation: Integrated Gradients', 'Segmenting the heart in the MRI', 'Measuring volumes and ejection fraction', 'MRI diagnosis from measurements', 'Checking clinical values against guidelines', 'Fusion network: ECG, MRI and health record together', 'Explaining the result in plain words'];
 const defaultPatient = { age: 52, blood_pressure: 140, cholesterol: 220, chest_pain: 'Typical angina', max_heart_rate: 150, exercise_angina: 'Yes' };
 
 // Per-browser preferences. Storage can be unavailable (private windows), so
@@ -2421,7 +2421,7 @@ function ResearchPage() {
             <tr><td><b>Ejection fraction</b></td><td>Mean absolute error</td><td>3.0 / 4.1 / 3.6 points against experts; 5.7 points against clinicians on 439 external Kaggle patients</td></tr>
             <tr><td><b>MRI diagnosis</b></td><td>Correct diagnoses</td><td>43 of 50 ACDC test patients (86%, 95% CI 74–93%); 25 of 43 M&amp;Ms test patients from other hospitals and scanners (58%)</td></tr>
             <tr><td><b>Health-record model</b> (stand-alone logistic regression, a baseline)</td><td>AUROC, coronary artery disease</td><td>0.850 (95% CI 0.79–0.90) on 184 UCI test patients; 0.73–0.87 when each of the four hospitals is held out in turn; 0.747 (0.68–0.81) at a fifth hospital (Z-Alizadeh Sani, 303 patients, four of the seven fields), where it underestimated risk: 44% predicted on average, 71% had disease</td></tr>
-            <tr><td><b>Fusion network</b></td><td>AUROC, heart disease, virtual test patients</td><td>0.973 (95% CI 0.970–0.977) with all three; F1 0.916, precision 0.904, recall 0.928, calibration error 0.028. Each alone: ECG 0.943, MRI 0.850, health record 0.823. On 5,000 virtual test patients</td></tr>
+            <tr><td><b>Fusion network</b></td><td>AUROC, heart disease, virtual test patients</td><td>0.965 (95% CI 0.961–0.970) with all three, 0.977 with a one-frame MRI; F1 0.884, precision 0.826, recall 0.951, calibration error 0.049. Each alone: ECG 0.940, MRI 0.833, health record 0.820. On 5,000 virtual test patients</td></tr>
           </tbody>
         </table>
       </div>
@@ -2431,20 +2431,22 @@ function ResearchPage() {
           <h2>Fusion network: every combination of inputs</h2>
         </div>
         <p style={{ fontSize: 13, color: '#637b86', margin: '0 0 10px' }}>
-          5,000 virtual test patients, half with heart disease. Each joins an ECG (PTB-XL fold 10), a cardiac MRI (ACDC, M&amp;Ms and M&amp;Ms-2 test patients) and a health record (UCI Heart Disease test patients) of different people with the same diagnosis, since no public dataset has all three for one person. None of these patients trained any of the models. The same network gives every row, with the missing inputs switched off; each row's decision threshold was set on validation patients.
+          5,000 virtual test patients, half with heart disease. Each joins an ECG (PTB-XL fold 10), a cardiac MRI (ACDC, M&amp;Ms and M&amp;Ms-2 test patients) and a health record (UCI Heart Disease test patients) of different people with the same diagnosis, since no public dataset has all three for one person. None of these patients trained any of the models. The same network gives every row, with the missing inputs switched off (one-frame rows: the same MRIs reduced to one frame); each row's decision threshold was set on validation patients.
         </p>
         <table>
           <thead>
             <tr><th>Inputs</th><th>AUROC (95% CI)</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>Specificity</th><th>F1</th><th>TP / FP / FN / TN</th></tr>
           </thead>
           <tbody>
-            <tr><td><b>ECG + MRI + health record</b></td><td>0.973 (0.970–0.977)</td><td>0.915</td><td>0.904</td><td>0.928</td><td>0.902</td><td>0.916</td><td>2319 / 246 / 181 / 2254</td></tr>
-            <tr><td><b>ECG + MRI</b></td><td>0.957 (0.952–0.962)</td><td>0.873</td><td>0.835</td><td>0.930</td><td>0.816</td><td>0.880</td><td>2325 / 459 / 175 / 2041</td></tr>
-            <tr><td><b>ECG + health record</b></td><td>0.966 (0.961–0.970)</td><td>0.900</td><td>0.888</td><td>0.916</td><td>0.884</td><td>0.902</td><td>2291 / 290 / 209 / 2210</td></tr>
-            <tr><td><b>MRI + health record</b></td><td>0.906 (0.898–0.914)</td><td>0.809</td><td>0.790</td><td>0.842</td><td>0.776</td><td>0.815</td><td>2104 / 560 / 396 / 1940</td></tr>
-            <tr><td><b>ECG</b></td><td>0.943 (0.937–0.949)</td><td>0.882</td><td>0.890</td><td>0.871</td><td>0.892</td><td>0.880</td><td>2177 / 269 / 323 / 2231</td></tr>
-            <tr><td><b>MRI</b></td><td>0.850 (0.839–0.861)</td><td>0.761</td><td>0.824</td><td>0.663</td><td>0.859</td><td>0.735</td><td>1658 / 353 / 842 / 2147</td></tr>
-            <tr><td><b>health record</b></td><td>0.823 (0.811–0.835)</td><td>0.769</td><td>0.747</td><td>0.815</td><td>0.723</td><td>0.779</td><td>2038 / 692 / 462 / 1808</td></tr>
+            <tr><td><b>ECG + MRI + health record</b></td><td>0.965 (0.961–0.970)</td><td>0.875</td><td>0.826</td><td>0.951</td><td>0.800</td><td>0.884</td><td>2378 / 501 / 122 / 1999</td></tr>
+            <tr><td><b>ECG + MRI + health record (one MRI frame)</b></td><td>0.977 (0.973–0.980)</td><td>0.922</td><td>0.902</td><td>0.946</td><td>0.897</td><td>0.923</td><td>2366 / 258 / 134 / 2242</td></tr>
+            <tr><td><b>ECG + MRI</b></td><td>0.946 (0.940–0.952)</td><td>0.860</td><td>0.825</td><td>0.914</td><td>0.806</td><td>0.867</td><td>2286 / 486 / 214 / 2014</td></tr>
+            <tr><td><b>ECG + health record</b></td><td>0.961 (0.956–0.966)</td><td>0.894</td><td>0.882</td><td>0.909</td><td>0.879</td><td>0.896</td><td>2273 / 303 / 227 / 2197</td></tr>
+            <tr><td><b>MRI + health record</b></td><td>0.894 (0.886–0.903)</td><td>0.773</td><td>0.711</td><td>0.919</td><td>0.626</td><td>0.802</td><td>2298 / 935 / 202 / 1565</td></tr>
+            <tr><td><b>ECG</b></td><td>0.940 (0.934–0.946)</td><td>0.871</td><td>0.877</td><td>0.862</td><td>0.879</td><td>0.870</td><td>2156 / 302 / 344 / 2198</td></tr>
+            <tr><td><b>MRI</b></td><td>0.833 (0.822–0.845)</td><td>0.743</td><td>0.706</td><td>0.833</td><td>0.653</td><td>0.764</td><td>2082 / 868 / 418 / 1632</td></tr>
+            <tr><td><b>MRI (one MRI frame)</b></td><td>0.840 (0.829–0.851)</td><td>0.772</td><td>0.915</td><td>0.600</td><td>0.944</td><td>0.725</td><td>1500 / 140 / 1000 / 2360</td></tr>
+            <tr><td><b>health record</b></td><td>0.820 (0.809–0.832)</td><td>0.759</td><td>0.753</td><td>0.769</td><td>0.748</td><td>0.761</td><td>1922 / 629 / 578 / 1871</td></tr>
           </tbody>
         </table>
       </div>

@@ -71,7 +71,10 @@ function Evidence({ children }) {
 
 // The model is not precise enough to state 0% or 100%; the backend words it the same way.
 const fusionPct = p => (p > 0.99 ? '>99%' : p < 0.01 ? '<1%' : pct(p));
-const points = e => `${e > 0 ? '+' : e < 0 ? '−' : ''}${Math.abs(Math.round(e * 100))} points`;
+const points = e => {
+  const n = Math.abs(Math.round(e * 100));
+  return `${e > 0 ? '+' : e < 0 ? '−' : ''}${n} ${n === 1 ? 'point' : 'points'}`;
+};
 
 function FusionResult({ fusion }) {
   const [audience, setAudience] = useState('patient');
@@ -87,7 +90,6 @@ function FusionResult({ fusion }) {
       </header>
       <div className="ar-fusion-modalities">
         {fusion.modalities.map(m => {
-          const largest = Math.max(...fusion.modalities.filter(x => x.effect !== undefined).map(x => Math.abs(x.effect)), 0.01);
           return (
             <div key={m.key} className={`ar-fusion-modality ${m.used ? '' : 'is-skipped'}`}>
               <small>{m.name}</small>
@@ -95,7 +97,8 @@ function FusionResult({ fusion }) {
                 <>
                   {m.effect !== undefined && (
                     <div className={`ar-fusion-bar ${m.effect < 0 ? 'is-lower' : ''}`}>
-                      <i style={{ width: `${Math.round(100 * Math.abs(m.effect) / largest)}%` }} />
+                      {/* On the 0-100 point scale, so a 2-point nudge does not look like a 60-point swing. */}
+                      <i style={{ width: `${Math.max(2, Math.round(100 * Math.abs(m.effect)))}%` }} />
                     </div>
                   )}
                   <span>{m.effect !== undefined ? `${m.effect >= 0 ? 'Raised' : 'Lowered'} it ${points(m.effect).replace(/^[+−]/, '')}` : 'The only input'}</span>
@@ -112,9 +115,10 @@ function FusionResult({ fusion }) {
         <button type="button" className={audience === 'clinician' ? 'active' : ''} onClick={() => setAudience('clinician')}>For clinicians</button>
       </div>
       <ul className="ar-because">{fusion.explanation[audience].map(line => <li key={line}>{line}</li>)}</ul>
-      {fusion.clinical_fields.length > 0 && audience === 'clinician' && (
+      {fusion.clinical_fields.some(f => Math.abs(f.points) >= 1) && audience === 'clinician' && (
         <p className="ar-sub">Health-record attribution (Integrated Gradients, points against a blank form): {
-          fusion.clinical_fields.map(f => `${f.name} ${f.points > 0 ? '+' : ''}${f.points}`).join(', ')}</p>
+          fusion.clinical_fields.filter(f => Math.abs(f.points) >= 1)
+            .map(f => `${f.name} ${f.points > 0 ? '+' : ''}${f.points}`).join(', ')}</p>
       )}
       {fusion.mri_note && <p className="ar-method">{fusion.mri_note}</p>}
       <p className="ar-method">{fusion.method}</p>

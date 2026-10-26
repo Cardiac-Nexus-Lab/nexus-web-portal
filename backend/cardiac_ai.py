@@ -136,15 +136,27 @@ def models() -> dict:
         # Our own artefact, saved by scripts/diagnose_mri.py; never load joblib from elsewhere.
         "diagnosis": joblib.load(results / "mri_diagnosis" / "diagnosis_model.joblib"),
         # The ECG + MRI + health-record fusion network, from nexus-ai-engine's scripts/train_fusion.py.
-        "fusion": _load_fusion(results / "fusion_dl"),
+        "fusion": _load_fusion(results / "fusion_dl", {"ecg": results / "local_xresnet18_full" / "ecg_multilabel.pt",
+                                                       "mri": mri_path}),
     }
 
 
-def _load_fusion(folder: Path) -> dict | None:
-    """The fusion network, its calibration and encoding statistics, and its test report; None if not trained yet."""
+def _load_fusion(folder: Path, branches: dict[str, Path]) -> dict | None:
+    """The fusion network, its calibration and encoding statistics, and its test report; None if not trained yet.
+
+    The network reads the ECG and MRI models' internal features, so it is only valid on the exact model files
+    it was built on. If either has changed (a retrained branch), it is not used, and the result says so,
+    until scripts/rebuild_fusion.py has rebuilt it."""
     if not (folder / "fusion_model.pt").exists():
         return None
     model, checkpoint = fusion_model.load_fusion(folder / "fusion_model.pt", DEVICE)
+    built_on = checkpoint.get("branch_checkpoints")
+    changed = [name for name, path in branches.items()
+               if not built_on or fusion_model.file_fingerprint(path) != built_on[name]["sha256"]]
+    if changed:
+        names = " and ".join({"ecg": "ECG", "mri": "MRI"}[c] for c in changed)
+        return {"unavailable": f"The {names} model has changed since the fusion network was built on it, so the "
+                               f"combined result is left out until the fusion network is rebuilt."}
     report = json.loads((folder / "fusion_report.json").read_text())
     return {"model": model, "checkpoint": checkpoint, "report": report}
 
@@ -839,10 +851,11 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
             "myocardial_mass_g": round(ed["ml"]["MYO"] * 1.05, 1),
         }
         fused = models().get("fusion")
-        if fused is not None and ed["exact_spacing"] and es["exact_spacing"]:
+        if fused is not None and "model" in fused and ed["exact_spacing"] and es["exact_spacing"]:
             result["_fusion_input"] = fusion_model.mri_vector(
-                np.concatenate([ed["pooled"], es["pooled"]]), pooled_features(ed["mask"], es["mask"], ed["spacing"]),
+                ed["pooled"], es["pooled"], pooled_features(ed["mask"], es["mask"], ed["spacing"]),
                 fused["checkpoint"]["mri_stats"])
+            result["_fusion_frames"] = 2
         if ed["ml"]["RV"] > 0:
             result["measurements"]["rv_ejection_fraction"] = round(100.0 * (1.0 - es["ml"]["RV"] / ed["ml"]["RV"]), 1)
         else:
@@ -886,6 +899,12 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
         result["measurements"] = {"slice_area_px": areas}
         if result["mode"] == "volume":
             result["measurements"].update({f"{k.lower()}_volume_ml": round(v, 1) for k, v in item["ml"].items()})
+            fused = models().get("fusion")
+            if fused is not None and "model" in fused and item["exact_spacing"]:
+                result["_fusion_input"] = fusion_model.mri_vector(
+                    item["pooled"], None, fusion_model.single_frame_measurements(item["mask"], item["spacing"]),
+                    fused["checkpoint"]["mri_stats"])
+                result["_fusion_frames"] = 1
             notes.append("One volume gives chamber sizes only. Upload both end-diastole and end-systole "
                          "volumes to measure ejection fraction.")
         else:
@@ -1001,7 +1020,7 @@ def _mri_phrase(mri: dict) -> str | None:
 def fuse(ecg: dict, mri: dict, clinical: dict) -> dict | None:
     """The fusion network's result for this patient, with its explanation in words."""
     fused = models().get("fusion")
-    if fused is None:
+    if fused is None or "model" not in fused:
         return None
     checkpoint, report = fused["checkpoint"], fused["report"]
     form = clinical.get("_fusion_input") or {}
@@ -1028,9 +1047,12 @@ def fuse(ecg: dict, mri: dict, clinical: dict) -> dict | None:
                             for f in result.get("clinical_fields", [])],
         "explanation": {"patient": fusion_model.explain_in_words(result, findings, "patient"),
                         "clinician": fusion_model.explain_in_words(result, findings, "clinician")},
-        "mri_note": (None if mri.get("_fusion_input") is not None else
-                     "The MRI was not used by the combined model: it needs the end-diastole and end-systole "
-                     "volumes as NIfTI or DICOM, so that sizes are in millimetres."),
+        "mri_note": {2: None,
+                     1: "The MRI was used as one frame: its image features, chamber volumes and muscle mass count, "
+                        "but ejection fraction needs both the end-diastole and end-systole frames.",
+                     None: "The MRI was not used by the combined model: it needs a 3D short-axis volume (NIfTI, or "
+                           "DICOM with slice spacing), so that sizes are in millimetres; a single 2D slice or a "
+                           "plain image is outlined but not measured."}[mri.get("_fusion_frames")],
         "method": ("A deep learning fusion network. Each modality has its own trained network: the ECG "
                    "classifier's embedding of the recording, the MRI segmenter's deepest image features with the "
                    "measurements of its outlines, and a small network over the health-record fields. Two "
@@ -1082,6 +1104,10 @@ def summarize(ecg: dict, mri: dict, clinical: dict) -> dict:
     fusion = fuse(ecg, mri, clinical)
     for part in (ecg, mri, clinical):
         part.pop("_fusion_input", None)  # model inputs, not part of the response
+        part.pop("_fusion_frames", None)
+    unavailable = (models().get("fusion") or {}).get("unavailable")
+    if unavailable:
+        add("info", "All three", unavailable)
     if fusion is not None:
         p = fusion["probability"]
         if p >= 0.7:
