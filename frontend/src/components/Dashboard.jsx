@@ -2243,6 +2243,7 @@ function AboutSettings({ setPage }) {
     ['ECG digitizer', 'CNN trace localizer for 12x1 printouts'],
     ['MRI segmenter', '2.5D U-Net, trained on ACDC, M&Ms and M&Ms-2'],
     ['MRI diagnosis', 'Logistic regression on heart measurements'],
+    ['Fusion network', 'Attention-based deep learning over ECG, MRI and health record'],
     ['Health checks', 'ACC/AHA 2017 and NCEP ATP III rules'],
   ];
   return (
@@ -2271,6 +2272,8 @@ function TechnologyPage() {
       body: 'Each slice goes in with its two neighbours and comes out outlined into left ventricle, right ventricle and heart muscle. The outlines give chamber volumes, ejection fraction and muscle mass.' },
     { Icon: ClipboardList, title: 'MRI diagnosis and health checks', sub: 'Measurements and guideline rules.',
       body: 'A logistic regression on the heart measurements, with height and weight, suggests one of five conditions. Blood pressure and cholesterol are checked against ACC/AHA 2017 and NCEP ATP III; these are rules, not a trained model.' },
+    { Icon: Activity, title: 'Fusion network: ECG + MRI + health record', sub: 'Deep learning over all three, explained in words.',
+      body: "Each modality keeps its own trained network: the ECG classifier's embedding, the MRI segmenter's deepest image features with the measurements of its outlines, and a small network over the health-record fields. Two attention layers let the three inform each other, a learned gate weighs them, and one output gives the chance of heart disease. Any modality can be missing." },
   ];
   return (
     <>
@@ -2303,13 +2306,14 @@ function TechnologyPage() {
           <div className="eyebrow">EXPLANATIONS AND SUMMARY</div>
           <h2>Every result shows its evidence</h2>
           <p style={{ marginTop: 10 }}>
-            ECG predictions come with an Integrated Gradients heat map of the moments and leads that drove them. MRI results show the model's outline on the scan, and the diagnosis lists the measurements that were out of range. No public dataset has ECG, MRI and health records for the same patients, so the three results are combined by written rules into one attention level.
+            ECG predictions come with an Integrated Gradients heat map of the moments and leads that drove them. MRI results show the model's outline on the scan, and the diagnosis lists the measurements that were out of range. The fusion network shows how much weight it gave each modality, how far each one moved the result, and which health-record values mattered most (Integrated Gradients), and turns these into plain sentences for patients and a more detailed version for clinicians. No public dataset has ECG, MRI and health records for the same patients, so the network is trained and tested on virtual patients: an ECG, an MRI and a health record of different people with the same diagnosis. Written rules then give one attention level.
           </p>
         </div>
         <div className="arch-diagram">
           <span>ECG<br /><b>Integrated Gradients</b></span>
           <span>MRI<br /><b>Outlines + reasons</b></span>
           <span>Health<br /><b>Guideline flags</b></span>
+          <span>Fusion network<br /><b>Weights, effects, plain words</b></span>
           <strong>Rule-based summary: Low / Moderate / High</strong>
         </div>
       </section>
@@ -2371,7 +2375,25 @@ function ResearchPage() {
               <td>Clinician LV volumes and ejection fraction</td>
             </tr>
             <tr>
-              <td><b>Health profile</b></td>
+              <td><b>UCI Heart Disease</b> (Detrano et al., 1989)</td>
+              <td>Health record</td>
+              <td>920 patients from four hospitals: 736 training, 184 test</td>
+              <td>Coronary artery disease on angiography</td>
+            </tr>
+            <tr>
+              <td><b>Z-Alizadeh Sani</b> (Alizadeh Sani et al., 2013)</td>
+              <td>Health record</td>
+              <td>303 external test patients from a fifth hospital, Tehran</td>
+              <td>Coronary artery disease on angiography</td>
+            </tr>
+            <tr>
+              <td><b>PM-ECG-ID</b> (Iring et al., 2024)</td>
+              <td>Real photographs and scans of printed PTB-XL ECGs</td>
+              <td>658 single-page images of 100 ECGs: three phones, a scanner, bent, crumpled and on-screen</td>
+              <td>The PTB-XL signal behind each image</td>
+            </tr>
+            <tr>
+              <td><b>Health checks</b></td>
               <td>Clinical values</td>
               <td>No training data</td>
               <td>ACC/AHA 2017 and NCEP ATP III guideline ranges</td>
@@ -2393,11 +2415,55 @@ function ResearchPage() {
             </tr>
           </thead>
           <tbody>
-            <tr><td><b>ECG classifier</b></td><td>Macro AUROC, five findings</td><td>0.911 (normal 0.941, MI 0.921, ST/T 0.930, conduction 0.924, hypertrophy 0.837)</td></tr>
-            <tr><td><b>ECG digitizer</b></td><td>Correlation with the original signal, flat scans</td><td>0.94</td></tr>
+            <tr><td><b>ECG classifier</b></td><td>Macro AUROC, five findings, PTB-XL test</td><td>0.911 (normal 0.941, MI 0.921, ST/T 0.930, conduction 0.924, hypertrophy 0.837)</td></tr>
+            <tr><td><b>ECG digitizer</b></td><td>Correlation with the true signal</td><td>0.94 on synthetic printouts, but 0.00 on 63 real photos and scans of 12x1 printouts (PM-ECG-ID); the app refuses all 63 rather than read them wrong</td></tr>
             <tr><td><b>MRI segmenter</b></td><td>Dice overlap with expert outlines</td><td>End-diastole, ACDC / M&amp;Ms / M&amp;Ms-2: LV 0.954 / 0.937 / 0.944, RV 0.928 / 0.892 / 0.908, myocardium 0.861 / 0.828 / 0.833</td></tr>
             <tr><td><b>Ejection fraction</b></td><td>Mean absolute error</td><td>3.0 / 4.1 / 3.6 points against experts; 5.7 points against clinicians on 439 external Kaggle patients</td></tr>
-            <tr><td><b>MRI diagnosis</b></td><td>Correct out of 50 ACDC test patients</td><td>43 (86%, 95% CI 74–93%)</td></tr>
+            <tr><td><b>MRI diagnosis</b></td><td>Correct diagnoses</td><td>43 of 50 ACDC test patients (86%, 95% CI 74–93%); 25 of 43 M&amp;Ms test patients from other hospitals and scanners (58%)</td></tr>
+            <tr><td><b>Health-record model</b> (stand-alone logistic regression, a baseline)</td><td>AUROC, coronary artery disease</td><td>0.850 (95% CI 0.79–0.90) on 184 UCI test patients; 0.73–0.87 when each of the four hospitals is held out in turn; 0.747 (0.68–0.81) at a fifth hospital (Z-Alizadeh Sani, 303 patients, four of the seven fields), where it underestimated risk: 44% predicted on average, 71% had disease</td></tr>
+            <tr><td><b>Fusion network</b></td><td>AUROC, heart disease, virtual test patients</td><td>0.973 (95% CI 0.970–0.977) with all three; F1 0.916, precision 0.904, recall 0.928, calibration error 0.028. Each alone: ECG 0.943, MRI 0.850, health record 0.823. On 5,000 virtual test patients</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="recent" style={{ marginTop: 24 }}>
+        <div className="section-header">
+          <h2>Fusion network: every combination of inputs</h2>
+        </div>
+        <p style={{ fontSize: 13, color: '#637b86', margin: '0 0 10px' }}>
+          5,000 virtual test patients, half with heart disease. Each joins an ECG (PTB-XL fold 10), a cardiac MRI (ACDC, M&amp;Ms and M&amp;Ms-2 test patients) and a health record (UCI Heart Disease test patients) of different people with the same diagnosis, since no public dataset has all three for one person. None of these patients trained any of the models. The same network gives every row, with the missing inputs switched off; each row's decision threshold was set on validation patients.
+        </p>
+        <table>
+          <thead>
+            <tr><th>Inputs</th><th>AUROC (95% CI)</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>Specificity</th><th>F1</th><th>TP / FP / FN / TN</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><b>ECG + MRI + health record</b></td><td>0.973 (0.970–0.977)</td><td>0.915</td><td>0.904</td><td>0.928</td><td>0.902</td><td>0.916</td><td>2319 / 246 / 181 / 2254</td></tr>
+            <tr><td><b>ECG + MRI</b></td><td>0.957 (0.952–0.962)</td><td>0.873</td><td>0.835</td><td>0.930</td><td>0.816</td><td>0.880</td><td>2325 / 459 / 175 / 2041</td></tr>
+            <tr><td><b>ECG + health record</b></td><td>0.966 (0.961–0.970)</td><td>0.900</td><td>0.888</td><td>0.916</td><td>0.884</td><td>0.902</td><td>2291 / 290 / 209 / 2210</td></tr>
+            <tr><td><b>MRI + health record</b></td><td>0.906 (0.898–0.914)</td><td>0.809</td><td>0.790</td><td>0.842</td><td>0.776</td><td>0.815</td><td>2104 / 560 / 396 / 1940</td></tr>
+            <tr><td><b>ECG</b></td><td>0.943 (0.937–0.949)</td><td>0.882</td><td>0.890</td><td>0.871</td><td>0.892</td><td>0.880</td><td>2177 / 269 / 323 / 2231</td></tr>
+            <tr><td><b>MRI</b></td><td>0.850 (0.839–0.861)</td><td>0.761</td><td>0.824</td><td>0.663</td><td>0.859</td><td>0.735</td><td>1658 / 353 / 842 / 2147</td></tr>
+            <tr><td><b>health record</b></td><td>0.823 (0.811–0.835)</td><td>0.769</td><td>0.747</td><td>0.815</td><td>0.723</td><td>0.779</td><td>2038 / 692 / 462 / 1808</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="recent" style={{ marginTop: 24 }}>
+        <div className="section-header">
+          <h2>Tried and not deployed</h2>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Change</th>
+              <th>Result</th>
+              <th>Decision</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><b>MRI diagnosis on ACDC, M&amp;Ms and M&amp;Ms-2 pooled</b> (297 training patients, no body-size measures, since M&amp;Ms-2 records no height or weight)</td><td>37 of 50 ACDC test patients against 43 for the deployed model; with each dataset held out in turn, balanced accuracy 0.65, 0.59 and 0.52</td><td>Not deployed: losing height and weight cost more than the extra patients gave</td></tr>
+            <tr><td><b>MRI diagnosis on ACDC plus the M&amp;Ms patients with height and weight</b> (180 training patients)</td><td>30 of 43 M&amp;Ms test patients against 25, but 39 of 50 ACDC test patients against 43</td><td>Not deployed: better at other hospitals, worse on ACDC; needs more patients with body size</td></tr>
           </tbody>
         </table>
       </div>
@@ -2421,12 +2487,12 @@ function ResearchPage() {
           <div className="upload-title">
             <LineChart size={22} />
             <div>
-              <h3>Angled & Phone-Captured ECG Rectification</h3>
-              <p>Robust interpretation of real-world smartphone photos of ECG paper.</p>
+              <h3>ECG printouts as images</h3>
+              <p>Flat 12x1 printouts today; photos of other layouts are refused for now.</p>
             </div>
           </div>
           <p style={{ fontSize: 13, color: '#637b86', marginTop: 12 }}>
-            Employs <b>morphological illumination normalization</b> (shadow and flash removal), <b>Hough transform line deskewing</b>, and <b>quadrilateral perspective warping</b> to extract diagnostic leads from camera-photographed printouts.
+            The page is found as the largest bright four-sided shape and its perspective is removed; the trace in each lead strip is then read column by column by a CNN. Every result is checked against Einthoven's law before the classifier sees it, so a page that cannot be read is refused rather than read wrong. On real phone photos and scans (PM-ECG-ID) the reader does not yet work, and the app refuses them; reading 3x4 and 6x2 layouts from photos is in development.
           </p>
         </div>
       </div>

@@ -12,21 +12,23 @@ a model output.
               -> volumes and ejection fraction when both ED and ES are given
               -> diagnosis from measurements when height and weight are given
     Clinical  entered values checked against guideline reference ranges
-              -> probability of coronary artery disease from a model trained on
-                 920 angiography patients at four centres (UCI Heart Disease)
-    Fusion    the clinical probability updated by the ECG's and the MRI's
-              evidence of infarction (Bayes' rule, likelihood ratios)
+    Fusion    a deep learning network over all three: the ECG classifier's
+              embedding, the MRI segmenter's image features and measurements,
+              and a network over the health-record fields, joined by attention
+              layers and a learned gate -> probability of heart disease, each
+              modality's weight and effect, explained in plain sentences
 
 No public dataset pairs ECG, MRI and health records for the same patients, so the
-fusion cannot be trained or tested as one model. Each model is validated on its
-own data, the combination rule and its two untestable assumptions are shown with
-every result, and the attention level still comes from explicit thresholds.
+fusion network is trained and tested on virtual patients (an ECG, an MRI and a
+health record of different people with the same diagnosis), and every result says
+so. The attention level still comes from explicit thresholds.
 """
 
 from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import sys
 import tempfile
@@ -53,8 +55,9 @@ from cardiac_nexus import ehr as ehr_model  # noqa: E402
 from cardiac_nexus.data import LEAD_NAMES, SUPERCLASSES  # noqa: E402
 from cardiac_nexus.ecg_image.pipeline import digitize_page, load_localizer  # noqa: E402
 from cardiac_nexus.explain import attribute  # noqa: E402
+from cardiac_nexus import fusion as fusion_model  # noqa: E402
 from cardiac_nexus.mri_data import IMAGE_SIZE, STRUCTURES, _fit, structure_volumes_ml  # noqa: E402
-from cardiac_nexus.mri_diagnosis import explain_patient, measurement_features  # noqa: E402
+from cardiac_nexus.mri_diagnosis import explain_patient, measurement_features, pooled_features  # noqa: E402
 from cardiac_nexus.mri_models import MRISegmenter  # noqa: E402
 from cardiac_nexus.training import build_model  # noqa: E402
 
@@ -132,14 +135,18 @@ def models() -> dict:
         "segmenter": segmenter,
         # Our own artefact, saved by scripts/diagnose_mri.py; never load joblib from elsewhere.
         "diagnosis": joblib.load(results / "mri_diagnosis" / "diagnosis_model.joblib"),
-        # Written by nexus-ai-engine's scripts/fusion_likelihood_ratios.py; absent in older engine checkouts.
-        "likelihood_ratios": (json.loads((results / "fusion" / "likelihood_ratios.json").read_text())
-                              if (results / "fusion" / "likelihood_ratios.json").exists() else None),
-        # scripts/train_ehr.py and scripts/fusion_three_way.py; our own artefacts, like the diagnosis model.
-        "ehr": joblib.load(results / "ehr" / "ehr_model.joblib"),
-        "ehr_report": json.loads((results / "ehr" / "ehr_report.json").read_text()),
-        "three_way": json.loads((results / "fusion" / "three_way.json").read_text()),
+        # The ECG + MRI + health-record fusion network, from nexus-ai-engine's scripts/train_fusion.py.
+        "fusion": _load_fusion(results / "fusion_dl"),
     }
+
+
+def _load_fusion(folder: Path) -> dict | None:
+    """The fusion network, its calibration and encoding statistics, and its test report; None if not trained yet."""
+    if not (folder / "fusion_model.pt").exists():
+        return None
+    model, checkpoint = fusion_model.load_fusion(folder / "fusion_model.pt", DEVICE)
+    report = json.loads((folder / "fusion_report.json").read_text())
+    return {"model": model, "checkpoint": checkpoint, "report": report}
 
 
 def _png(fig) -> str:
@@ -165,42 +172,64 @@ LOW_CONFIDENCE_MAX_IMAGE = 0.3  # printouts had at most 22% of the trace read wi
 COPIED_LEADS_MAX = 0.5       # real recordings had at most 9% of lead pairs near-identical
 
 
-def limb_lead_consistency(signal: np.ndarray) -> float:
+def limb_lead_consistency(signal: np.ndarray, printed: np.ndarray | None = None) -> float | None:
     """How well leads III, aVR, aVL and aVF follow from leads I and II (mean R^2).
 
     Einthoven's and Goldberger's laws make those four leads linear combinations of I and II
     in any real recording, whatever the patient's condition. Unrelated data has no reason to
     obey them. R^2 with an intercept is unchanged by per-lead standardization.
+
+    With `printed` (a page that printed only part of each lead), a lead is scored only on
+    the samples where it and leads I and II were all printed, and skipped when that is under
+    a second: on a 3x4 page aVR, aVL and aVF run at 2.5-5 s, when lead I is not on the page.
+    Returns None when no lead can be scored.
     """
-    basis = np.stack([signal[0], signal[1], np.ones(signal.shape[1])], axis=1)
+    printed = np.ones(signal.shape, bool) if printed is None else printed
     scores = []
     for lead in (2, 3, 4, 5):
-        target = signal[lead]
+        together = printed[0] & printed[1] & printed[lead]
+        if together.sum() < 100:
+            continue
+        basis = np.stack([signal[0, together], signal[1, together], np.ones(together.sum())], axis=1)
+        target = signal[lead, together]
         coef, *_ = np.linalg.lstsq(basis, target, rcond=None)
         residual = ((target - basis @ coef) ** 2).sum()
         scores.append(1.0 - residual / (((target - target.mean()) ** 2).sum() + 1e-9))
-    return float(np.mean(scores))
+    return float(np.mean(scores)) if scores else None
 
 
-def copied_lead_share(signal: np.ndarray) -> float:
-    """Share of lead pairs that are near-identical, as when every row of a blank page reads the same."""
+def copied_lead_share(signal: np.ndarray, printed: np.ndarray | None = None) -> float:
+    """Share of lead pairs that are near-identical, as when every row of a blank page reads the same.
+
+    With `printed`, each lead's printed samples are compared, trimmed to the shortest, since
+    leads a page prints at different times are still alike if every row read the same."""
+    if printed is not None:
+        parts = [signal[lead, printed[lead]] for lead in range(signal.shape[0])]
+        length = min(len(part) for part in parts)
+        signal = np.stack([part[:length] for part in parts])
     with np.errstate(invalid="ignore", divide="ignore"):
         correlation = np.nan_to_num(np.corrcoef(signal))
     upper = np.triu_indices(signal.shape[0], 1)
     return float(np.mean(np.abs(correlation[upper]) > 0.99))
 
 
-def check_is_ecg(signal: np.ndarray, from_image: bool, low_confidence: float = 0.0) -> None:
-    """Raise InputError when the signal cannot be a 12-lead ECG."""
+def check_is_ecg(signal: np.ndarray, from_image: bool, low_confidence: float = 0.0,
+                 printed: np.ndarray | None = None) -> None:
+    """Raise InputError when the signal cannot be a 12-lead ECG.
+
+    `printed` marks the samples a printout actually showed; the rest is fill and is not checked."""
     what = "image" if from_image else "file"
     hint = ("Upload a flat, front-on scan of a 12x1 ECG printout." if from_image
             else "Upload a 12-lead ECG with the leads in the standard order I, II, III, aVR, aVL, aVF, V1-V6.")
     if from_image and low_confidence > LOW_CONFIDENCE_MAX_IMAGE:
         raise InputError(f"This {what} does not look like an ECG printout: no clear trace was found in "
                          f"{low_confidence:.0%} of it. {hint}")
-    if copied_lead_share(signal) > COPIED_LEADS_MAX:
+    if copied_lead_share(signal, printed) > COPIED_LEADS_MAX:
         raise InputError(f"This {what} does not look like an ECG: most of its 12 leads are identical. {hint}")
-    consistency = limb_lead_consistency(signal)
+    consistency = limb_lead_consistency(signal, printed)
+    if consistency is None:
+        raise InputError(f"This {what} does not show leads I and II alongside the other limb leads, so it cannot "
+                         f"be checked as a 12-lead ECG. {hint}")
     if consistency < (LIMB_LEAD_MIN_IMAGE if from_image else LIMB_LEAD_MIN_TABLE):
         raise InputError(f"This {what} does not look like a 12-lead ECG: leads III, aVR, aVL and aVF do not "
                          f"follow from leads I and II as they must in a real recording (Einthoven's law; "
@@ -405,6 +434,8 @@ def analyze_ecg(filename: str, data: bytes) -> dict:
         target = int(np.argmax(probabilities))
 
     explanation = attribute(m["ecg"], signal, target, DEVICE, steps=32)
+    with torch.no_grad():
+        embedding = m["ecg"].encoder(torch.from_numpy(signal)[None].to(DEVICE))[0].numpy()
     lead_share = np.clip(explanation.values, 0, None).sum(axis=1)
     lead_share = lead_share / (lead_share.sum() or 1.0)
     order = np.argsort(lead_share)[::-1][:3]
@@ -420,6 +451,7 @@ def analyze_ecg(filename: str, data: bytes) -> dict:
             f"Integrated Gradients for '{top_label}' (red supports it, blue argues against)"),
         "leads_most_relied_on": [{"lead": LEAD_NAMES[i], "share": round(float(lead_share[i]), 3)} for i in order],
         "notes": notes,
+        "_fusion_input": embedding,
         "evidence": MODEL_EVIDENCE["ecg"],
     }
 
@@ -684,17 +716,6 @@ SEGMENT_BATCH = 16
 
 
 @torch.no_grad()
-def _segment(volume: np.ndarray) -> np.ndarray:
-    """Each slice with its neighbours as channels (2.5D), as in training."""
-    image = _normalize(volume)
-    n = len(image)
-    stacks = np.stack([np.stack([image[max(i - 1, 0)], image[i], image[min(i + 1, n - 1)]]) for i in range(n)])
-    # A few slices at a time, so a large volume cannot exhaust memory on the server.
-    masks = [models()["segmenter"](torch.from_numpy(stacks[i:i + SEGMENT_BATCH]).to(DEVICE)).argmax(dim=1)
-             for i in range(0, n, SEGMENT_BATCH)]
-    return torch.cat(masks).numpy().astype(np.uint8)
-
-
 def _mri_figure(panels: list[tuple[str, np.ndarray, np.ndarray]]) -> str:
     colours = {1: "#e4572e", 2: "#29335c", 3: "#17bebb"}
     fig, axes = plt.subplots(1, len(panels), figsize=(4.2 * len(panels), 4.4))
@@ -779,7 +800,8 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
                              f"NRRD (.nrrd), MetaImage (.mha / .mhd), TIFF (.tif / .tiff), ZIP archives (.zip), or image slices (.png / .jpg / .bmp / .webp).")
 
     for item in loaded:
-        item["mask"] = _segment(item["volume"])
+        item["mask"], item["pooled"] = fusion_model.mri_volume_features(
+            models()["segmenter"], fusion_model.normalize_volume(item["volume"]), DEVICE, batch=SEGMENT_BATCH)
         item["ml"] = structure_volumes_ml(item["mask"], item["spacing"])
         # Photos, logos and ECG printouts would otherwise reach the summary as an MRI with nothing
         # wrong; the segmenter even marks small "ventricles" in some of them.
@@ -816,6 +838,11 @@ def analyze_mri(files: list[tuple[str, bytes]], height_cm: float | None, weight_
             "rv_end_diastolic_ml": round(ed["ml"]["RV"], 1),
             "myocardial_mass_g": round(ed["ml"]["MYO"] * 1.05, 1),
         }
+        fused = models().get("fusion")
+        if fused is not None and ed["exact_spacing"] and es["exact_spacing"]:
+            result["_fusion_input"] = fusion_model.mri_vector(
+                np.concatenate([ed["pooled"], es["pooled"]]), pooled_features(ed["mask"], es["mask"], ed["spacing"]),
+                fused["checkpoint"]["mri_stats"])
         if ed["ml"]["RV"] > 0:
             result["measurements"]["rv_ejection_fraction"] = round(100.0 * (1.0 - es["ml"]["RV"] / ed["ml"]["RV"]), 1)
         else:
@@ -941,39 +968,8 @@ def assess_clinical(age: int, gender: str, blood_pressure: int | None, cholester
         "flags": flags,
         "method": "Checked against published guideline ranges (ACC/AHA 2017 blood pressure, NCEP ATP III "
                   "cholesterol).",
-        "model": coronary_disease_probability(age, gender, blood_pressure, cholesterol, max_heart_rate,
-                                              chest_pain, exercise_angina),
-    }
-
-
-def _ehr_evidence(report: dict) -> str:
-    internal = report["internal_test"]
-    external = [e["auroc"] for e in report["leave_one_centre_out"].values() if e["auroc"] is not None]
-    return (f"Trained on {report['split']['train']} angiography patients from four centres; on "
-            f"{internal['patients']} unseen patients AUROC {internal['auroc']:.2f} "
-            f"(95% CI {internal['auroc_95ci'][0]:.2f}-{internal['auroc_95ci'][1]:.2f}); at a centre left out of "
-            f"training, AUROC {min(external):.2f}-{max(external):.2f}.")
-
-
-def coronary_disease_probability(age, gender, blood_pressure, cholesterol, max_heart_rate,
-                                 chest_pain, exercise_angina) -> dict:
-    """Probability of angiographic coronary artery disease from the entered findings.
-
-    A blank field is averaged over the values real training patients had, rather
-    than filled with one typical value the model would treat as a measurement.
-    """
-    bundle = models()["ehr"]
-    row = ehr_model.form_row(age, gender, blood_pressure, cholesterol, max_heart_rate, chest_pain, exercise_angina)
-    probability = ehr_model.predict(bundle["model"], row, bundle["reference"])
-    entered = [ehr_model.LABELS[f] for f in ehr_model.FEATURES if not pd.isna(row[f].iloc[0])]
-    return {
-        "outcome": "coronary artery disease (more than 50% narrowing of a major artery)",
-        "probability": round(probability, 4),
-        "because": ehr_model.explain(bundle["model"], row, bundle["reference"]),
-        "used": entered,
-        "population": ("Among patients referred for coronary angiography, as in the training data; in the "
-                       "general population the same findings mean a lower probability."),
-        "evidence": _ehr_evidence(models()["ehr_report"]),
+        "_fusion_input": ehr_model.form_row(age, gender, blood_pressure, cholesterol, max_heart_rate,
+                                            chest_pain, exercise_angina).iloc[0].to_dict(),
     }
 
 
@@ -981,111 +977,74 @@ def coronary_disease_probability(age, gender, blood_pressure, cholesterol, max_h
 # Summary
 # ----------------------------------------------------------------------------
 
-def combine_ecg_mri(ecg: dict, mri: dict, ratios: dict | None) -> list[dict]:
-    """Update the ECG probability of a diagnosis with the MRI classifier's likelihood ratio.
-
-    Only for diagnoses both models name (ECG MI with MRI infarction, ECG HYP with
-    MRI HCM). The second is a loose match, so it is applied only when the MRI
-    calls HCM. The calibrated ECG probability is taken as
-    the prior; the MRI classifier's call is the evidence, weighted by a likelihood
-    ratio estimated from out-of-fold predictions on ACDC training patients:
-
-        posterior odds = ECG odds x LR+   if the MRI calls that diagnosis
-        posterior odds = ECG odds x LR-   if it calls another one
-
-    This is exact only if, given the true diagnosis, the ECG and MRI findings are
-    independent. No public dataset pairs ECG and MRI for the same patients, so that
-    assumption is untested and the combined number is not a validated or
-    calibrated probability. The range comes from the likelihood ratio's 95%
-    interval alone; it ignores uncertainty in the ECG probability.
-    """
-    if not ratios or "diagnosis" not in mri:
-        return []
-    ecg_probability = {f["code"]: f["probability"] for f in ecg["findings"]}
-    mri_call = mri["diagnosis"]["probabilities"][0]["code"]
-    combined = []
-    for mri_class, entry in ratios["pairs"].items():
-        prior = ecg_probability.get(entry["ecg_class"])
-        if prior is None:
-            continue
-        prior = min(max(prior, 1e-4), 1 - 1e-4)
-        odds = prior / (1 - prior)
-        called = mri_call == mri_class
-        if not called and not entry.get("update_when_not_called", True):
-            continue  # e.g. no HCM call says little about ECG hypertrophy from other causes
-        ratio = entry["lr_positive"] if called else entry["lr_negative"]
-        low, high = entry["lr_positive_95ci"] if called else entry["lr_negative_95ci"]
-        to_probability = lambda lr: odds * lr / (1 + odds * lr)
-        combined.append({
-            "ecg_class": entry["ecg_class"], "mri_class": mri_class, "mri_called": called,
-            "ecg_probability": round(prior, 4), "likelihood_ratio": round(ratio, 3),
-            "combined_probability": round(to_probability(ratio), 4),
-            "range": [round(to_probability(low), 4), round(to_probability(high), 4)],
-            "text": (f"ECG {CLASS_LABELS.get(entry['ecg_class'], entry['ecg_class']).lower()} {prior:.0%}; "
-                     f"MRI {'calls' if called else 'does not call'} {DIAGNOSIS_LABELS[mri_class].lower()} "
-                     f"(likelihood ratio {ratio:.2g}). Combined: {to_probability(ratio):.0%} "
-                     f"(range {to_probability(low):.0%}-{to_probability(high):.0%})."),
-        })
-    return combined
-
-
-def _odds(p: float) -> float:
-    return p / (1 - p)
-
-
 def _percent(p: float) -> str:
-    """A probability as text; the combination is not precise enough to state 0% or 100%."""
+    """A probability as text; the model is not precise enough to state 0% or 100%."""
     return "above 99%" if p > 0.99 else "below 1%" if p < 0.01 else f"{p:.0%}"
 
 
-def combine_three(ecg: dict, mri: dict, clinical: dict, settings: dict) -> dict:
-    """Probability of ischaemic heart disease from all three models, by Bayes' rule.
+def _ecg_phrase(ecg: dict) -> str:
+    abnormal = [f for f in ecg["findings"] if f["code"] != "NORM" and f["probability"] >= 0.5]
+    if not abnormal:
+        return "no clear abnormality"
+    top = max(abnormal, key=lambda f: f["probability"])
+    return f"{top['label'].lower()}, {top['probability']:.0%}"
 
-    The health-record probability is the starting point (pre-test probability). The
-    ECG's calibrated MI probability becomes a likelihood ratio against the MI rate
-    of the fold it was calibrated on; the MRI classifier's infarction call has
-    out-of-fold likelihood ratios. Each step is returned so the result can be read
-    as a clinician would read it: start here, this test moved it by this much.
-    Probabilities are clipped first so no single model can force certainty.
-    """
-    low, high = settings["probability_clip"]
-    clip = lambda p: min(max(p, low), high)
-    prior = clip(clinical["model"]["probability"])
-    odds = _odds(prior)
-    steps = [{"modality": "Health record", "kind": "starting probability", "probability": round(prior, 4),
-              "text": f"Clinical findings give {prior:.0%} probability of coronary artery disease."}]
 
-    ecg_class = settings["ecg"]["class"]
-    p_ecg = clip(next(f["probability"] for f in ecg["findings"] if f["code"] == ecg_class))
-    ecg_ratio = _odds(p_ecg) / _odds(settings["ecg"]["calibration_rate"])
-    odds *= ecg_ratio
-    steps.append({"modality": "ECG", "kind": "likelihood ratio", "ratio": round(ecg_ratio, 3),
-                  "probability": round(odds / (1 + odds), 4),
-                  "text": f"ECG myocardial infarction {p_ecg:.0%} (likelihood ratio {ecg_ratio:.2g}): "
-                          f"now {_percent(odds / (1 + odds))}."})
-
+def _mri_phrase(mri: dict) -> str | None:
     if "diagnosis" in mri:
-        mri_settings = settings["mri"]
-        called = mri["diagnosis"]["probabilities"][0]["code"] == mri_settings["class"]
-        mri_ratio = mri_settings["lr_positive"] if called else mri_settings["lr_negative"]
-        odds *= mri_ratio
-        steps.append({"modality": "MRI", "kind": "likelihood ratio", "ratio": round(mri_ratio, 3),
-                      "probability": round(odds / (1 + odds), 4),
-                      "text": f"MRI {'calls' if called else 'does not call'} previous infarction (likelihood ratio "
-                              f"{mri_ratio:.2g}): now {_percent(odds / (1 + odds))}."})
-    else:
-        steps.append({"modality": "MRI", "kind": "not used", "ratio": 1.0, "probability": round(odds / (1 + odds), 4),
-                      "text": "No MRI diagnosis (it needs two volumes with known pixel size and height and weight), "
-                              "so the MRI did not change the probability."})
+        top = mri["diagnosis"]["probabilities"][0]
+        return f"most like {top['label'].lower()}"
+    ef = mri.get("measurements", {}).get("lv_ejection_fraction")
+    return f"left ventricular ejection fraction {ef:.0f}%" if ef is not None else None
 
-    final = odds / (1 + odds)
+
+def fuse(ecg: dict, mri: dict, clinical: dict) -> dict | None:
+    """The fusion network's result for this patient, with its explanation in words."""
+    fused = models().get("fusion")
+    if fused is None:
+        return None
+    checkpoint, report = fused["checkpoint"], fused["report"]
+    form = clinical.get("_fusion_input") or {}
+    row = {k: (None if v is None or (isinstance(v, float) and np.isnan(v)) else v) for k, v in form.items()}
+    vector, blank = fusion_model.encode_clinical(row, checkpoint["clinical_stats"])
+    inputs = fusion_model.FusionInputs(ecg=ecg.get("_fusion_input"), mri=mri.get("_fusion_input"), clinical=vector)
+    result = fusion_model.predict(fused["model"], inputs, checkpoint["calibration"], checkpoint["clinical_stats"], blank)
+    findings = {"ecg": _ecg_phrase(ecg)}
+    if _mri_phrase(mri):
+        findings["mri"] = _mri_phrase(mri)
+    p = result["probability"]
+    test = report["test"]["ecg+mri+clinical"]
+    names = fusion_model.MODALITY_NAMES
     return {
-        "target": settings["target"],
-        "probability": round(final, 4),
-        "steps": steps,
-        "method": ("Bayes' rule: the health-record probability multiplied, as odds, by the ECG's and the MRI's "
-                   "likelihood ratios. Each model was trained and tested on its own data."),
-        "assumptions": settings["assumptions"],
+        "target": "heart disease",
+        "probability": round(p, 4),
+        "level": "high" if p >= 0.7 else "moderate" if p >= 0.4 else "low",
+        "modalities": [
+            {"key": key, "name": names[key][0].upper() + names[key][1:], "used": key in result["modalities"],
+             "finding": findings.get(key),
+             **{k: round(v, 4) for k, v in result["modalities"].get(key, {}).items()}}
+            for key in fusion_model.MODALITIES],
+        "clinical_fields": [{"name": f["name"], "points": round(f["points"], 1)}
+                            for f in result.get("clinical_fields", [])],
+        "explanation": {"patient": fusion_model.explain_in_words(result, findings, "patient"),
+                        "clinician": fusion_model.explain_in_words(result, findings, "clinician")},
+        "mri_note": (None if mri.get("_fusion_input") is not None else
+                     "The MRI was not used by the combined model: it needs the end-diastole and end-systole "
+                     "volumes as NIfTI or DICOM, so that sizes are in millimetres."),
+        "method": ("A deep learning fusion network. Each modality has its own trained network: the ECG "
+                   "classifier's embedding of the recording, the MRI segmenter's deepest image features with the "
+                   "measurements of its outlines, and a small network over the health-record fields. Two "
+                   "attention layers let the three inform each other, a learned gate weighs them, and one output "
+                   "gives the probability of heart disease. The effect of each modality is how much the result "
+                   "moves when that modality is left out; the health-record values are explained with Integrated "
+                   "Gradients."),
+        "evidence": (f"Trained on {report['virtual_patients']['train_per_epoch']:,} new virtual patients per epoch "
+                     f"and tested on {report['virtual_patients']['test']:,}: each joins an ECG (PTB-XL), a cardiac "
+                     f"MRI (ACDC, M&Ms, M&Ms-2) and a health record (UCI Heart Disease) of different people with the "
+                     f"same diagnosis, from patients none of the models trained on. AUROC with all three "
+                     f"{test['auroc']['estimate']:.3f} (95% CI {test['auroc']['low']:.3f}-{test['auroc']['high']:.3f}), "
+                     f"F1 {test['f1']:.3f}. No public dataset has all three for the same people, so this measures "
+                     f"how well the network combines the evidence, not how it performs on real patients."),
     }
 
 
@@ -1120,34 +1079,28 @@ def summarize(ecg: dict, mri: dict, clinical: dict) -> dict:
         if item["level"] in ("high", "moderate"):
             add(item["level"], "Clinical", f"{item['item']}: {item['text']}")
 
-    fusion = combine_three(ecg, mri, clinical, models()["three_way"])
-    p = fusion["probability"]
-    if p >= 0.7:
-        add("high", "All three", f"Combined probability of ischaemic heart disease is {_percent(p)} (untested combination).")
-    elif p >= 0.4:
-        add("moderate", "All three", f"Combined probability of ischaemic heart disease is {_percent(p)} (untested combination).")
+    fusion = fuse(ecg, mri, clinical)
+    for part in (ecg, mri, clinical):
+        part.pop("_fusion_input", None)  # model inputs, not part of the response
+    if fusion is not None:
+        p = fusion["probability"]
+        if p >= 0.7:
+            add("high", "All three", f"The combined model puts the chance of heart disease at {_percent(p)}.")
+        elif p >= 0.4:
+            add("moderate", "All three", f"The combined model puts the chance of heart disease at {_percent(p)}.")
 
     levels = {r["level"] for r in reasons}
     attention = "High" if "high" in levels else "Moderate" if "moderate" in levels else "Low"
     if not reasons:
         reasons.append({"level": "ok", "modality": "All",
                         "text": "No finding crossed the thresholds used for this summary."})
-    combined = combine_ecg_mri(ecg, mri, models().get("likelihood_ratios"))
     return {
         "attention": attention,
         "reasons": reasons,
         "fusion": fusion,
-        "combined": combined,
-        "combined_method": ("Bayesian update of the ECG probability by the MRI classifier's likelihood ratio, "
-                            "only where both models name the same diagnosis. It assumes the ECG and MRI findings "
-                            "are independent given the true diagnosis; no public dataset pairs ECG and MRI for the "
-                            "same patients, so this is untested and the combined figure is not a validated "
-                            "probability. The attention level above still comes from the listed thresholds.")
-                           if combined else None,
-        "method": "Each modality is analysed by its own trained and tested model, and the three are combined by "
-                  "Bayes' rule into one probability of ischaemic heart disease. No public dataset has ECG, MRI and "
-                  "health records for the same patients, so the combination itself is not validated; the "
-                  "attention level comes from the explicit thresholds listed here.",
+        "method": "Each modality is analysed by its own trained deep learning model, and a fusion network combines "
+                  "the three into one probability of heart disease, explained in words. The attention level comes "
+                  "from the explicit thresholds listed here.",
     }
 
 

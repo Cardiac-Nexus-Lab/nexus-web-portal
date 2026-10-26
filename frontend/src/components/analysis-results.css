@@ -64,15 +64,24 @@
 
 /* Health record, ECG and MRI combined */
 .ar-fusion { border-left: 6px solid #0d7482; }
-.ar-fusion-chain { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 14px; }
-.ar-fusion-step { display: flex; flex-direction: column; min-width: 104px; padding: 10px 14px; border-radius: 12px; background: #f1f7f8; border: 1px solid #e1ecee; }
-.ar-fusion-step small { font-size: 10px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #5f7684; }
-.ar-fusion-step b { font: 800 24px var(--font-heading); color: #1a4458; margin: 2px 0; }
-.ar-fusion-step span { font-size: 12px; color: #708691; }
-.ar-fusion-step.is-skipped { opacity: 0.55; }
-.ar-fusion-step.is-final { background: #0d7482; border-color: #0d7482; }
-.ar-fusion-step.is-final small, .ar-fusion-step.is-final span { color: #cfeef1; }
-.ar-fusion-step.is-final b { color: #fff; }
+.ar-fusion header { align-items: center; }
+.ar-fusion-total { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; }
+.ar-fusion-total b { font: 800 30px var(--font-heading); color: #1a4458; line-height: 1; }
+.ar-fusion-total span { font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #5f7684; }
+.ar-fusion.tone-high .ar-fusion-total b { color: #b3261e; }
+.ar-fusion.tone-moderate .ar-fusion-total b { color: #b26a00; }
+.ar-fusion-modalities { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 6px 0 14px; }
+.ar-fusion-modality { display: flex; flex-direction: column; gap: 5px; padding: 10px 14px; border-radius: 12px; background: #f1f7f8; border: 1px solid #e1ecee; }
+.ar-fusion-modality small { font-size: 10px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #5f7684; }
+.ar-fusion-modality span { font-size: 12px; color: #4d6572; }
+.ar-fusion-modality em { font-size: 12px; font-style: normal; color: #1a4458; }
+.ar-fusion-modality.is-skipped { opacity: 0.55; }
+.ar-fusion-bar { height: 6px; border-radius: 3px; background: #dbe8ea; overflow: hidden; }
+.ar-fusion-bar i { display: block; height: 100%; background: #c0392b; }
+.ar-fusion-bar.is-lower i { background: #2e8b57; }
+.ar-fusion-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.ar-fusion-tabs button { padding: 5px 12px; border-radius: 999px; border: 1px solid #cfe0e3; background: #fff; color: #36586a; font-size: 12px; font-weight: 700; cursor: pointer; }
+.ar-fusion-tabs button.active { background: #0d7482; border-color: #0d7482; color: #fff; }
 .ar-fusion-arrow { color: #8aa4b0; flex: none; }
 .ar-ehr { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid #edf3f5; }
 .ar-ehr-value { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }

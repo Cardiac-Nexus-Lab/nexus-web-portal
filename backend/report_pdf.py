@@ -276,18 +276,25 @@ def build_report_pdf(result: dict) -> bytes:
                              ("LINEBEFORE", (0, 0), (0, -1), 4, ink), ("TOPPADDING", (0, 0), (-1, -1), 6),
                              ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
     story += [_p("1. Summary", "h2"), box, Spacer(1, 2 * mm), _p(summary["method"], "small")]
-    if summary.get("combined"):
-        story += [Spacer(1, 2 * mm), _p("ECG and MRI together", "cellb")]
-        story += [_p(item["text"], "cell") for item in summary["combined"]]
-        story += [_p(summary["combined_method"], "small")]
     fusion = summary.get("fusion")
     if fusion:
         percent = lambda p: "above 99%" if p > 0.99 else "below 1%" if p < 0.01 else f"{p:.0%}"
         story += [Spacer(1, 2 * mm),
-                  _p(f"Health record, ECG and MRI combined: {percent(fusion['probability'])} "
-                     f"probability of {fusion['target']}", "cellb")]
-        story += [_p(f"•  {step['text']}", "cell") for step in fusion["steps"]]
-        story += [_p(f"{fusion['method']} {' '.join(fusion['assumptions'])}", "small")]
+                  _p(f"ECG, MRI and health record together: {percent(fusion['probability'])} chance of "
+                     f"{fusion['target']} ({fusion['level']})", "cellb")]
+        story += [_p(line, "cell") for line in fusion["explanation"]["patient"]]
+        rows = [["Modality", "Its own finding", "Weight", "Effect on the result"]]
+        for m in fusion["modalities"]:
+            if not m["used"]:
+                rows.append([_p(m["name"], "cellb"), _p("not given", "cell"), _p("-", "cell"), _p("-", "cell")])
+                continue
+            effect = f"{100 * m['effect']:+.0f} points" if "effect" in m else "only input"
+            rows.append([_p(m["name"], "cellb"), _p(m.get("finding") or "-", "cell"),
+                         _p(f"{m['weight']:.2f}", "cell"), _p(effect, "cell")])
+        story += [Spacer(1, 1.5 * mm), _table(rows, [30 * mm, full - 30 * mm - 52 * mm, 18 * mm, 34 * mm])]
+        if fusion.get("mri_note"):
+            story += [_p(fusion["mri_note"], "small")]
+        story += [_p(f"{fusion['method']} {fusion['evidence']}", "small")]
 
     # Clinical
     clinical = result["clinical"]
@@ -298,11 +305,6 @@ def build_report_pdf(result: dict) -> bytes:
                      Paragraph(f'<font color="{DOT.get(flag["level"], "#8aa4b0")}">●</font> '
                                f'{status_text.get(flag["level"], flag["level"])}', STYLES["cell"])])
     story += [_p("2. Clinical values", "h2"), _p(clinical["method"], "small"), Spacer(1, 2 * mm)]
-    model = clinical.get("model")
-    if model:
-        story += [_p(f"Probability of {model['outcome']}: {model['probability']:.0%}", "cellb")]
-        story += [_p(f"•  {b}", "cell") for b in model["because"]]
-        story += [_p(f"{model['population']} {model['evidence']}", "small"), Spacer(1, 2 * mm)]
     story += [_table(rows, [36 * mm, full - 36 * mm - 32 * mm, 32 * mm])]
 
     # ECG
