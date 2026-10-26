@@ -18,6 +18,8 @@ backend/**/__pycache__/
 # ACDC MRI files may not be redistributed; see backend/samples/README.md
 backend/samples/*.nii
 backend/samples/*.nii.gz
+frontend/public/samples/*.nii
+frontend/public/samples/*.nii.gz
 
 # Editor and OS
 .DS_Store

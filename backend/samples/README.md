@@ -48,6 +48,17 @@ Each case contains 3D NIfTI short-axis volumes covering the left ventricle, righ
 | **`mri_patient104_ed.nii.gz`**<br>`mri_patient104_es.nii.gz` | ACDC test patient 104 | **180 cm, 74 kg** | **Hypertrophic Cardiomyopathy (HCM)** (~99%) | **LV EF: 79.4%**, hyperdynamic, severe septal thickening |
 | **`mri_patient109_ed.nii.gz`**<br>`mri_patient109_es.nii.gz` | ACDC test patient 109 | **180 cm, 60 kg** | **Abnormal RV (RV)** (~99%) | **RV EF: 31.1%**, dilated right ventricular cavity |
 
+ACDC data may not be redistributed, so these MRI files are not in the repository or on the website.
+Fetch a pair from the public Hugging Face mirror, run from this folder (macOS Terminal or Windows
+Command Prompt; change `106` to the patient you want):
+
+```bash
+curl -L -o mri_patient106_ed.nii.gz https://huggingface.co/datasets/viennh2012/cardiac_cine_acdc/resolve/main/test/patient106/patient106_sax_ed.nii.gz
+curl -L -o mri_patient106_es.nii.gz https://huggingface.co/datasets/viennh2012/cardiac_cine_acdc/resolve/main/test/patient106/patient106_sax_es.nii.gz
+```
+
+Or, after fetching ACDC in `nexus-ai-engine`, copy them from `nexus-ai-engine/data/acdc/test/patientNNN/`.
+
 ---
 
 ## 4. Multimodal Patient Profiles & Clinical EHR Scenarios
